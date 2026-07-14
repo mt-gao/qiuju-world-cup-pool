@@ -70,6 +70,8 @@ export const fixtureEntries = sqliteTable(
     betCount: integer("bet_count").notNull(),
     stakeCents: integer("stake_cents").notNull(),
     lockedAt: text("locked_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    editUnlockedAt: text("edit_unlocked_at"),
+    revision: integer("revision").notNull().default(1),
   },
   (table) => [
     uniqueIndex("fixture_entries_fixture_participant_unique").on(

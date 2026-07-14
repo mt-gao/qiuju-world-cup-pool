@@ -130,3 +130,31 @@ test("pool totals expose an accessible per-person contribution sheet", async () 
   assert.match(css, /\.wb-stat-link[\s\S]*min-height:\s*48px/);
   assert.match(css, /\.wb-pool-people/);
 });
+
+test("admin PIN and per-person edit unlock remain server-authorized", async () => {
+  const [workbench, stateRoute, syncRoute, schema] = await Promise.all([
+    readFile(new URL("../app/components/PoolWorkbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/results/sync/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(workbench, /type="password"/);
+  assert.match(workbench, /fetch\("\/api\/admin\/session"/);
+  assert.doesNotMatch(workbench, /6666/, "the default PIN must not be shipped in client code");
+  assert.match(workbench, /set-entry-edit-unlocked/);
+  assert.match(workbench, /原注单仍然有效并计入奖池/);
+
+  const guard = stateRoute.indexOf("await hasValidAdminSession(request)");
+  const databaseOpen = stateRoute.indexOf("const db = getDb();", guard);
+  assert.ok(guard >= 0 && databaseOpen > guard, "admin mutations must authenticate before opening the database");
+  assert.match(stateRoute, /db\.transaction/);
+  assert.match(syncRoute, /POST\(request: Request\)[\s\S]*hasValidAdminSession/);
+  assert.match(schema, /editUnlockedAt:[\s\S]*revision:/);
+
+  const livePoll = workbench.slice(
+    workbench.indexOf("async function pollLiveFixture()"),
+    workbench.indexOf("if (!toast) return"),
+  );
+  assert.doesNotMatch(livePoll, /method:\s*"POST"/);
+});

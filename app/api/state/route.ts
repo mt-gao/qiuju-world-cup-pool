@@ -16,6 +16,7 @@ import {
   deriveFixtureStates,
   FIXTURES,
   gradeSelection,
+  isFixtureBettingWindowOpen,
   matchScoreValidationError,
   MAX_BETS_PER_PARTICIPANT,
   PARTICIPANTS,
@@ -30,12 +31,14 @@ import {
   type ManualResultRequest,
   type OddsOffer,
   type ParticipantId,
+  type SetEntryEditUnlockedRequest,
   type Settlement,
   type StateMutationRequest,
   type UploadOddsRequest,
 } from "@/lib/app-data";
 import { ALL_SEED_ODDS } from "@/lib/seed-odds";
 import { settlePool } from "@/lib/settlement";
+import { hasValidAdminSession } from "@/lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -322,6 +325,9 @@ async function loadState(db: Database, now = new Date().toISOString()): Promise<
     betCount: row.betCount,
     stakeCents: row.stakeCents,
     lockedAt: row.lockedAt,
+    editUnlockedAt: row.editUnlockedAt,
+    revision: row.revision,
+    canEdit: row.editUnlockedAt !== null && derived.activeFixtureId === row.fixtureId,
   }));
   const contributedCents = mappedBets.reduce((sum, bet) => sum + bet.stakeCents, 0);
   const paidCents = mappedBets.reduce((sum, bet) => sum + bet.payoutCents, 0);
@@ -362,7 +368,6 @@ function activeFixtureForRows<
     awayTeamPlaceholder: boolean;
   }
 >(fixtureRows: T[], now: string): T | null {
-  const nowMs = Date.parse(now);
   const next = [...fixtureRows]
     .filter((fixture) => fixture.status !== "settled")
     .sort((a, b) => a.sequence - b.sequence)[0];
@@ -370,8 +375,7 @@ function activeFixtureForRows<
     next.status === "scheduled" &&
     !next.homeTeamPlaceholder &&
     !next.awayTeamPlaceholder &&
-    Date.parse(next.kickoffAt) > nowMs &&
-    nowMs < Date.parse(next.lockAt)
+    isFixtureBettingWindowOpen(next, now)
     ? next
     : null;
 }
@@ -412,6 +416,54 @@ function resolveOffers(
     return offer;
   });
   if (new Set(resolved.map((offer) => offer.id)).size !== resolved.length) {
+    badRequest("同一个赔率选项不能重复下注。", 400);
+  }
+  return resolved;
+}
+
+function resolveEditableSelections(
+  selections: BetSelectionInput[],
+  availableOffers: (typeof oddsOffers.$inferSelect)[],
+  lockedBets: (typeof bets.$inferSelect)[],
+) {
+  const resolved = selections.map((selection) => {
+    const requestedId = selection.offerId ?? selection.id;
+    const lockedBet = requestedId
+      ? lockedBets.find((candidate) => candidate.offerId === requestedId)
+      : selection.marketType && selection.selectionCode
+        ? lockedBets.find(
+            (candidate) =>
+              normalizeMarketValue(candidate.marketType) ===
+                normalizeMarketValue(selection.marketType!) &&
+              normalizeMarketValue(candidate.selectionCode) ===
+                normalizeMarketValue(selection.selectionCode!),
+          )
+        : undefined;
+    const lockedOddsMatch =
+      lockedBet &&
+      (selection.odds === undefined ||
+        (Number.isFinite(selection.odds) &&
+          Math.abs(selection.odds - lockedBet.odds) <= 1e-9));
+    if (lockedBet && lockedOddsMatch) {
+      return {
+        offerId: lockedBet.offerId,
+        marketType: lockedBet.marketType,
+        selectionCode: lockedBet.selectionCode,
+        label: lockedBet.label,
+        odds: lockedBet.odds,
+      };
+    }
+
+    const [offer] = resolveOffers([selection], availableOffers);
+    return {
+      offerId: offer.id,
+      marketType: offer.marketType,
+      selectionCode: offer.selectionCode,
+      label: offer.label,
+      odds: offer.odds,
+    };
+  });
+  if (new Set(resolved.map((selection) => selection.offerId)).size !== resolved.length) {
     badRequest("同一个赔率选项不能重复下注。", 400);
   }
   return resolved;
@@ -485,7 +537,11 @@ async function lockEntry(
   }
 
   const [existingEntry] = await db
-    .select({ id: fixtureEntries.id })
+    .select({
+      id: fixtureEntries.id,
+      editUnlockedAt: fixtureEntries.editUnlockedAt,
+      revision: fixtureEntries.revision,
+    })
     .from(fixtureEntries)
     .where(
       and(
@@ -495,17 +551,91 @@ async function lockEntry(
     )
     .limit(1);
   // Retry-safe even if the first successful response was lost or the global
-  // lock time passed between attempts. A different selection set is a real
-  // mutation attempt and must not be reported as a successful retry.
+  // lock time passed between attempts. An administrator can separately grant
+  // this participant a time-limited edit permission for the active fixture.
   if (existingEntry) {
     const lockedBets = await lockedBetsForParticipant(
       db,
       payload.fixtureId,
       participantId,
     );
-    if (!selectionsMatchLockedBets(payload.selections, lockedBets)) {
+    if (existingEntry.editUnlockedAt === null) {
+      if (selectionsMatchLockedBets(payload.selections, lockedBets)) return;
       badRequest("该参与者已经锁定，本场下注不能修改。", 409);
     }
+
+    const entryRevision =
+      "entryRevision" in payload ? payload.entryRevision : undefined;
+    if (
+      !Number.isSafeInteger(entryRevision) ||
+      entryRevision !== existingEntry.revision
+    ) {
+      badRequest("下注状态已经变化，请刷新页面后再确认。", 409);
+    }
+
+    const fixtureRows = await db.select().from(fixtures).orderBy(asc(fixtures.sequence));
+    const activeFixture = activeFixtureForRows(fixtureRows, now);
+    if (!activeFixture || activeFixture.id !== payload.fixtureId) {
+      badRequest("本场已到锁定时间，原注单保持有效，不能再修改。", 423);
+    }
+    if (lockedBets.some((bet) => bet.status !== "pending")) {
+      badRequest("本场注单已进入结算流程，不能再修改。", 409);
+    }
+
+    const availableOffers = await db
+      .select()
+      .from(oddsOffers)
+      .where(and(eq(oddsOffers.fixtureId, payload.fixtureId), eq(oddsOffers.active, true)));
+    const selectedOffers = resolveEditableSelections(
+      payload.selections,
+      availableOffers,
+      lockedBets,
+    );
+
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(fixtureEntries)
+        .set({
+          betCount: selectedOffers.length,
+          stakeCents: selectedOffers.length * STAKE_CENTS,
+          lockedAt: now,
+          editUnlockedAt: null,
+          revision: existingEntry.revision + 1,
+        })
+        .where(
+          and(
+            eq(fixtureEntries.id, existingEntry.id),
+            eq(fixtureEntries.revision, existingEntry.revision),
+          ),
+        )
+        .returning({ id: fixtureEntries.id });
+      if (updated.length !== 1) {
+        badRequest("下注状态已经变化，请刷新页面后再确认。", 409);
+      }
+      await tx
+        .delete(bets)
+        .where(
+          and(
+            eq(bets.fixtureId, payload.fixtureId),
+            eq(bets.participantId, participantId),
+          ),
+        );
+      await tx.insert(bets).values(
+        selectedOffers.map((offer) => ({
+          id: crypto.randomUUID(),
+          fixtureId: payload.fixtureId,
+          participantId,
+          offerId: offer.offerId,
+          marketType: offer.marketType,
+          selectionCode: offer.selectionCode,
+          label: offer.label,
+          odds: offer.odds,
+          stakeCents: STAKE_CENTS,
+          placedAt: now,
+          status: "pending",
+        })),
+      );
+    });
     return;
   }
 
@@ -588,6 +718,51 @@ async function lockEntry(
       badRequest("该参与者已经锁定，本场下注不能修改。", 409);
     }
   }
+}
+
+async function setEntryEditUnlocked(
+  db: Database,
+  payload: SetEntryEditUnlockedRequest,
+  now: string,
+) {
+  const participantId = validateParticipantId(payload.participantId);
+  if (typeof payload.unlocked !== "boolean") {
+    badRequest("unlocked 必须是布尔值。", 400);
+  }
+
+  const fixtureRows = await db.select().from(fixtures).orderBy(asc(fixtures.sequence));
+  const activeFixture = activeFixtureForRows(fixtureRows, now);
+  if (!activeFixture || activeFixture.id !== payload.fixtureId) {
+    badRequest("只能调整当前开放投注比赛，且必须早于固定锁定时间。", 423);
+  }
+
+  const [entry] = await db
+    .select()
+    .from(fixtureEntries)
+    .where(
+      and(
+        eq(fixtureEntries.fixtureId, payload.fixtureId),
+        eq(fixtureEntries.participantId, participantId),
+      ),
+    )
+    .limit(1);
+  if (!entry) badRequest("该参与者本场还没有锁定注单。", 404);
+
+  const alreadyUnlocked = entry.editUnlockedAt !== null;
+  if (alreadyUnlocked === payload.unlocked) return;
+
+  await db
+    .update(fixtureEntries)
+    .set({
+      editUnlockedAt: payload.unlocked ? now : null,
+      revision: entry.revision + 1,
+    })
+    .where(
+      and(
+        eq(fixtureEntries.id, entry.id),
+        eq(fixtureEntries.revision, entry.revision),
+      ),
+    );
 }
 
 function validateOfferPayload(payload: UploadOddsRequest) {
@@ -940,12 +1115,22 @@ export async function POST(request: Request) {
     if (!payload || typeof payload !== "object" || !("action" in payload)) {
       badRequest("请求格式无效。", 400);
     }
+    if (
+      (payload.action === "set-entry-edit-unlocked" ||
+        payload.action === "upload-odds" ||
+        payload.action === "manual-result") &&
+      !(await hasValidAdminSession(request))
+    ) {
+      badRequest("请先输入管理密码。", 401);
+    }
     const db = getDb();
     await ensureSeedData(db);
     const now = new Date().toISOString();
 
     if (payload.action === "place-bets" || payload.action === "lock-entry") {
       await lockEntry(db, payload, now);
+    } else if (payload.action === "set-entry-edit-unlocked") {
+      await setEntryEditUnlocked(db, payload, now);
     } else if (payload.action === "upload-odds") {
       await uploadOdds(db, payload, now);
     } else if (payload.action === "manual-result") {

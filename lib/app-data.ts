@@ -1,4 +1,4 @@
-export const APP_STATE_VERSION = 2 as const;
+export const APP_STATE_VERSION = 3 as const;
 export const STAKE_CENTS = 1_000;
 export const MAX_BETS_PER_PARTICIPANT = 3;
 export const LOCK_MINUTES_BEFORE_KICKOFF = 120;
@@ -345,6 +345,9 @@ export interface FixtureEntry {
   betCount: number;
   stakeCents: number;
   lockedAt: string;
+  editUnlockedAt: string | null;
+  revision: number;
+  canEdit: boolean;
 }
 
 export interface PoolSummary {
@@ -400,6 +403,14 @@ export interface LockEntryRequest {
   participantId: ParticipantId;
   selections: BetSelectionInput[];
   idempotencyKey?: string;
+  entryRevision?: number;
+}
+
+export interface SetEntryEditUnlockedRequest {
+  action: "set-entry-edit-unlocked";
+  fixtureId: string;
+  participantId: ParticipantId;
+  unlocked: boolean;
 }
 
 export interface OddsOfferInput {
@@ -433,6 +444,7 @@ export interface ManualResultRequest {
 export type StateMutationRequest =
   | PlaceBetsRequest
   | LockEntryRequest
+  | SetEntryEditUnlockedRequest
   | UploadOddsRequest
   | ManualResultRequest;
 
@@ -551,6 +563,22 @@ function validTime(value: string): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+export function isFixtureBettingWindowOpen(
+  fixture: Pick<Fixture, "kickoffAt" | "lockAt">,
+  now: string,
+): boolean {
+  const nowMs = Date.parse(now);
+  const kickoffMs = Date.parse(fixture.kickoffAt);
+  const lockMs = Date.parse(fixture.lockAt);
+  return (
+    Number.isFinite(nowMs) &&
+    Number.isFinite(kickoffMs) &&
+    Number.isFinite(lockMs) &&
+    kickoffMs > nowMs &&
+    nowMs < lockMs
+  );
+}
+
 /**
  * Adds time-sensitive UI state without trusting the browser for write checks.
  * API mutations repeat the lock validation using their own server clock.
@@ -575,8 +603,7 @@ export function deriveFixtureStates(
     nextNotStarted &&
     nextFixtureIsConfigured &&
     nextNotStarted.recordStatus === "scheduled" &&
-    validTime(nextNotStarted.kickoffAt) > nowMs &&
-    nowMs < validTime(nextNotStarted.lockAt)
+    isFixtureBettingWindowOpen(nextNotStarted, now)
       ? nextNotStarted.id
       : null;
 

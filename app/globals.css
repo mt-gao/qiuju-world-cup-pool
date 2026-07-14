@@ -162,6 +162,12 @@ select:disabled {
   border-radius: 10px;
 }
 
+.wb-avatar-admin {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+}
+
 .wb-topbar {
   z-index: 10;
   display: flex;
@@ -212,6 +218,10 @@ select:disabled {
 .wb-top-actions button:hover {
   background: oklch(1 0 0 / 0.1);
   color: white;
+}
+
+.wb-top-actions button:disabled {
+  opacity: 0.58;
 }
 
 .wb-main {
@@ -1129,6 +1139,13 @@ api-sports-widget[data-theme="WorldCup"] {
   font-weight: 800;
 }
 
+.wb-editing-badge {
+  padding-right: 4px;
+  color: var(--pitch-deep);
+  font-size: 8px;
+  font-weight: 850;
+}
+
 .wb-draft-slots {
   padding: 5px 6px 0;
 }
@@ -1197,7 +1214,7 @@ api-sports-widget[data-theme="WorldCup"] {
   padding: 5px 6px 6px;
 }
 
-.wb-draft-actions button:first-child {
+.wb-draft-actions > button:not(.wb-lock-button) {
   border: 1px solid var(--line);
 }
 
@@ -1856,8 +1873,195 @@ api-sports-widget[data-theme="WorldCup"] {
 }
 
 .wb-manage-body {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
+}
+
+.wb-manage-body > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.wb-admin-login-sheet {
+  width: min(100%, 420px);
+}
+
+.wb-admin-login {
+  display: grid;
+  gap: 9px;
+  padding: 16px 14px max(18px, calc(14px + env(safe-area-inset-bottom)));
+}
+
+.wb-admin-login > p {
+  margin: 0 0 2px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.wb-admin-login label {
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.wb-admin-login input {
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: var(--surface);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5em;
+  text-align: center;
+}
+
+.wb-admin-login input[aria-invalid="true"] {
+  border-color: var(--alert);
+}
+
+.wb-admin-login .wb-admin-login-error {
+  margin: -1px 0 0;
+  color: var(--alert);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.wb-admin-login button {
+  min-height: 48px;
+  margin-top: 3px;
+  border-radius: 10px;
+  background: var(--wb-green);
+  color: white;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.wb-admin-login button:disabled {
+  opacity: 0.45;
+}
+
+.wb-admin-unlock {
+  overflow: hidden;
+  border: 1px solid oklch(0.52 0.1 151 / 0.45);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.wb-admin-unlock > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  background: var(--pitch-soft);
+}
+
+.wb-admin-unlock h3,
+.wb-admin-unlock p {
+  margin: 0;
+}
+
+.wb-admin-unlock h3 {
+  font-size: 12px;
+}
+
+.wb-admin-unlock header p {
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.wb-admin-unlock header > span {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: white;
+  color: var(--pitch-deep);
+  font-size: 8px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.wb-admin-unlock ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wb-admin-unlock li {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px 7px 11px;
+}
+
+.wb-admin-unlock li + li {
+  border-top: 1px solid var(--line);
+}
+
+.wb-admin-unlock li > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.wb-admin-unlock li > span > span,
+.wb-admin-unlock li b,
+.wb-admin-unlock li small {
+  display: block;
+  min-width: 0;
+}
+
+.wb-admin-unlock li b {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-admin-unlock li small {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 8px;
+}
+
+.wb-admin-unlock li > button {
+  min-width: 82px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--wb-green);
+  color: white;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.wb-admin-unlock li > button.is-unlocked {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.wb-admin-unlock li > button:disabled {
+  opacity: 0.45;
+}
+
+.wb-admin-unlock .wb-admin-unlock-empty {
+  padding: 15px 12px;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.55;
 }
 
 .wb-admin-section,

@@ -22,6 +22,7 @@ import {
   type ApiFootballFixturePayload,
 } from "@/lib/api-football";
 import { settlePool } from "@/lib/settlement";
+import { hasValidAdminSession } from "@/lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -850,8 +851,14 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    if (!(await hasValidAdminSession(request))) {
+      return Response.json(
+        { error: "请先输入管理密码。" },
+        { status: 401 },
+      );
+    }
     // Public deployments must never let a browser bypass the persistent
     // provider cooldown. The button remains useful as an immediate catch-up
     // check while repeated clicks reuse the same cached/audited result.

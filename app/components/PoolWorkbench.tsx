@@ -6,12 +6,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   createSeedState,
   type AppState,
+  type Bet,
   type Fixture,
+  type FixtureEntry,
   type OddsOffer,
   type ParticipantId,
 } from "@/lib/app-data";
@@ -20,7 +24,16 @@ import { ParticipantAvatar } from "./ParticipantAvatar";
 import { PoolPodium, type PoolRankingRow } from "./PoolPodium";
 
 type DraftSlots = Partial<Record<ParticipantId, Array<OddsOffer | null>>>;
-type SheetName = "pool" | "people" | "odds" | "confirm" | "manage" | "rules" | null;
+type SheetName =
+  | "pool"
+  | "people"
+  | "odds"
+  | "confirm"
+  | "admin-login"
+  | "manage"
+  | "unlock-confirm"
+  | "rules"
+  | null;
 
 const STAGE_LABEL: Record<Fixture["stage"], string> = {
   semi_final: "半决赛",
@@ -164,26 +177,79 @@ function DialogShell({
   onClose,
   children,
   className = "",
+  initialFocusRef,
 }: {
   title: string;
   eyebrow?: string;
   onClose: () => void;
   children: ReactNode;
   className?: string;
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const returnFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    closeButtonRef.current?.focus();
-    return () => returnFocus?.focus();
-  }, []);
+    const dialog = dialogRef.current;
+    const backdrop = dialog?.parentElement;
+    const app = backdrop?.parentElement;
+    const inertTargets = app
+      ? [...app.children].filter(
+          (child): child is HTMLElement =>
+            child instanceof HTMLElement && child !== backdrop,
+        )
+      : [];
+    const previousInert = inertTargets.map((target) => target.inert);
+    inertTargets.forEach((target) => {
+      target.inert = true;
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = [...dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled):not([type="hidden"]), textarea:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => !element.hidden && element.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    if (initialFocusRef?.current) initialFocusRef.current.focus();
+    else closeButtonRef.current?.focus();
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      inertTargets.forEach((target, index) => {
+        target.inert = previousInert[index] ?? false;
+      });
+      returnFocus?.focus();
+    };
+  }, [initialFocusRef]);
 
   return (
     <div className="wb-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`wb-sheet ${className}`} role="dialog" aria-modal="true" aria-labelledby="wb-dialog-title">
+      <section ref={dialogRef} className={`wb-sheet ${className}`} role="dialog" aria-modal="true" aria-labelledby="wb-dialog-title" tabIndex={-1}>
         <div className="wb-sheet-handle" aria-hidden="true" />
         <header className="wb-sheet-header">
           <div>
@@ -196,6 +262,24 @@ function DialogShell({
       </section>
     </div>
   );
+}
+
+function lockedBetAsOffer(bet: Bet, activeOffers: OddsOffer[]): OddsOffer {
+  const unchangedActiveOffer = activeOffers.find(
+    (offer) => offer.id === bet.offerId && Math.abs(offer.odds - bet.odds) <= 1e-9,
+  );
+  return unchangedActiveOffer ?? {
+    id: bet.offerId,
+    fixtureId: bet.fixtureId,
+    marketType: bet.marketType,
+    selectionCode: bet.selectionCode,
+    label: bet.label,
+    odds: bet.odds,
+    rulesText: "原锁定注单可保留；如需替换，请选择当前有效赔率。",
+    source: "原锁定注单",
+    active: false,
+    uploadedAt: bet.placedAt,
+  };
 }
 
 function offerGroup(marketType: string): string {
@@ -250,9 +334,16 @@ export function PoolWorkbench() {
   const [picker, setPicker] = useState<{ participantId: ParticipantId; slot: number } | null>(null);
   const [pickedOfferId, setPickedOfferId] = useState<string | null>(null);
   const [pendingParticipant, setPendingParticipant] = useState<ParticipantId | null>(null);
+  const [unlockTarget, setUnlockTarget] = useState<ParticipantId | null>(null);
   const [busy, setBusy] = useState(false);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false);
+  const [adminPin, setAdminPin] = useState("");
+  const [adminPinError, setAdminPinError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lockClock, setLockClock] = useState(() => Date.now());
+  const [stateReceivedAt, setStateReceivedAt] = useState(() => Date.now());
   const [oddsJson, setOddsJson] = useState('{\n  "source": "手动导入",\n  "offers": []\n}');
   const [halfHome, setHalfHome] = useState("");
   const [halfAway, setHalfAway] = useState("");
@@ -266,10 +357,27 @@ export function PoolWorkbench() {
   const syncInFlightRef = useRef(false);
   const lastResultSyncAtRef = useRef(0);
   const liveSyncFixtureIdRef = useRef<string | null>(null);
+  const adminPinInputRef = useRef<HTMLInputElement | null>(null);
+  const editingRevisionsRef = useRef<Partial<Record<ParticipantId, number>>>({});
 
   const fixtures = useMemo(() => [...state.fixtures].sort((a, b) => a.sequence - b.sequence), [state.fixtures]);
   const selectedFixture = fixtures.find((fixture) => fixture.id === selectedFixtureId) ?? fixtures[0] ?? null;
-  const isActive = Boolean(selectedFixture && selectedFixture.id === state.activeFixtureId && selectedFixture.isBettingOpen);
+  const estimatedServerNowMs = Date.parse(state.serverTime) + Math.max(
+    0,
+    lockClock - stateReceivedAt,
+  );
+  const activeStateFixture = fixtures.find(
+    (fixture) => fixture.id === state.activeFixtureId,
+  );
+  const locallyActiveFixtureId =
+    activeStateFixture?.isBettingOpen &&
+    estimatedServerNowMs < Date.parse(activeStateFixture.lockAt)
+      ? activeStateFixture.id
+      : null;
+  const isActive = Boolean(
+    selectedFixture &&
+    selectedFixture.id === locallyActiveFixtureId,
+  );
   const selectedEntries = useMemo(
     () => selectedFixture ? state.entries.filter((entry) => entry.fixtureId === selectedFixture.id) : [],
     [selectedFixture, state.entries],
@@ -338,23 +446,83 @@ export function PoolWorkbench() {
   }, [selectedEntries, selectedFixture, state.bets, state.participants]);
 
   const activeDraftPeople = state.participants.filter((person) => (drafts[person.id]?.length ?? 0) > 0);
+  const pendingEntry = pendingParticipant
+    ? selectedEntries.find((entry) => entry.participantId === pendingParticipant) ?? null
+    : null;
+  const unlockTargetEntry = unlockTarget
+    ? selectedEntries.find((entry) => entry.participantId === unlockTarget) ?? null
+    : null;
   const pickerFixture = selectedFixture;
   const pickerGroups = useMemo(() => groupedOffers(pickerFixture?.offers ?? []), [pickerFixture]);
+
+  const applyState = useCallback((next: AppState) => {
+    const editableEntries = next.entries.filter((entry) => entry.canEdit);
+    const editableByParticipant = new Map(
+      editableEntries.map((entry) => [entry.participantId, entry]),
+    );
+    const draftUpdates: Partial<Record<ParticipantId, Array<OddsOffer | null>>> = {};
+
+    for (const participant of next.participants) {
+      const entry = editableByParticipant.get(participant.id);
+      const hydratedRevision = editingRevisionsRef.current[participant.id];
+      if (!entry && hydratedRevision !== undefined) {
+        delete editingRevisionsRef.current[participant.id];
+        draftUpdates[participant.id] = [];
+        continue;
+      }
+      if (!entry || hydratedRevision === entry.revision) continue;
+
+      const fixture = next.fixtures.find((candidate) => candidate.id === entry.fixtureId);
+      const entryBets = next.bets.filter(
+        (bet) =>
+          bet.fixtureId === entry.fixtureId &&
+          bet.participantId === entry.participantId,
+      );
+      draftUpdates[participant.id] = entryBets.map((bet) =>
+        lockedBetAsOffer(bet, fixture?.offers ?? []),
+      );
+      editingRevisionsRef.current[participant.id] = entry.revision;
+    }
+
+    const receivedAt = Date.now();
+    stateRef.current = next;
+    setState(next);
+    setStateReceivedAt(receivedAt);
+    if (Object.keys(draftUpdates).length > 0) {
+      setDrafts((current) => ({ ...current, ...draftUpdates }));
+    }
+  }, []);
 
   const refreshState = useCallback(async (signal?: AbortSignal): Promise<AppState> => {
     const response = await fetch("/api/state", { cache: "no-store", signal });
     if (!response.ok) throw new Error(await responseError(response));
     const next = unwrapState(await response.json());
     if (signal?.aborted) return next;
-    stateRef.current = next;
-    setState(next);
+    applyState(next);
     setSelectedFixtureId((current) => current ?? next.activeFixtureId ?? next.fixtures[0]?.id ?? null);
     return next;
-  }, []);
+  }, [applyState]);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    const activeFixture = state.fixtures.find(
+      (fixture) => fixture.id === state.activeFixtureId,
+    );
+    if (!activeFixture) return;
+    const serverNowMs = Date.parse(state.serverTime);
+    const lockAtMs = Date.parse(activeFixture.lockAt);
+    if (!Number.isFinite(serverNowMs) || !Number.isFinite(lockAtMs)) return;
+    const elapsedSinceReceipt = Math.max(0, Date.now() - stateReceivedAt);
+    const delay = Math.max(0, lockAtMs - (serverNowMs + elapsedSinceReceipt) + 25);
+    const timer = window.setTimeout(() => {
+      setLockClock(Date.now());
+      void refreshState().catch(() => undefined);
+    }, Math.min(delay, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [refreshState, state.activeFixtureId, state.fixtures, state.serverTime, stateReceivedAt]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -435,7 +603,7 @@ export function PoolWorkbench() {
       syncInFlightRef.current = true;
       lastResultSyncAtRef.current = nowMs;
       try {
-        const response = await fetch("/api/results/sync", { method: "POST" });
+        const response = await fetch("/api/results/sync", { cache: "no-store" });
         if (!response.ok) throw new Error(await responseError(response));
         if (!cancelled) await refreshState();
       } catch {
@@ -467,11 +635,8 @@ export function PoolWorkbench() {
     if (!sheet) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const close = (event: KeyboardEvent) => event.key === "Escape" && setSheet(null);
-    document.addEventListener("keydown", close);
     return () => {
       document.body.style.overflow = previous;
-      document.removeEventListener("keydown", close);
     };
   }, [sheet]);
 
@@ -538,7 +703,8 @@ export function PoolWorkbench() {
   function openOdds(participantId: ParticipantId, slot: number) {
     if (!isActive) return;
     setPicker({ participantId, slot });
-    setPickedOfferId(drafts[participantId]?.[slot]?.id ?? null);
+    const currentOffer = drafts[participantId]?.[slot];
+    setPickedOfferId(currentOffer?.active ? currentOffer.id : null);
     setSheet("odds");
   }
 
@@ -553,6 +719,71 @@ export function PoolWorkbench() {
     });
     setSheet(null);
     setPicker(null);
+  }
+
+  async function assertAdminResponse(response: Response) {
+    if (response.ok) return;
+    const message = await responseError(response);
+    if (response.status === 423) {
+      await refreshState().catch(() => undefined);
+    }
+    if (response.status === 401) {
+      setAdminAuthenticated(false);
+      setAdminPin("");
+      setAdminPinError("管理登录已失效，请重新输入密码。");
+      setSheet("admin-login");
+    }
+    throw new Error(message);
+  }
+
+  async function openManage() {
+    setAdminPinError(null);
+    if (adminAuthenticated) {
+      setSheet("manage");
+      return;
+    }
+    setAdminBusy(true);
+    try {
+      const response = await fetch("/api/admin/session", { cache: "no-store" });
+      const body = (await response.json()) as { authenticated?: boolean };
+      if (response.ok && body.authenticated) {
+        setAdminAuthenticated(true);
+        setSheet("manage");
+      } else {
+        setSheet("admin-login");
+      }
+    } catch {
+      setAdminPinError("暂时无法验证管理登录，请重试。");
+      setSheet("admin-login");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
+  async function authenticateAdmin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!/^\d{4}$/.test(adminPin)) {
+      setAdminPinError("请输入4位数字管理密码。");
+      return;
+    }
+    setAdminBusy(true);
+    setAdminPinError(null);
+    try {
+      const response = await fetch("/api/admin/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pin: adminPin }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      setAdminAuthenticated(true);
+      setAdminPin("");
+      setSheet("manage");
+    } catch (reason) {
+      setAdminPinError(reason instanceof Error ? reason.message : "管理密码验证失败。");
+      window.requestAnimationFrame(() => adminPinInputRef.current?.focus());
+    } finally {
+      setAdminBusy(false);
+    }
   }
 
   async function lockEntry() {
@@ -574,15 +805,26 @@ export function PoolWorkbench() {
           fixtureId: selectedFixture.id,
           participantId: pendingParticipant,
           idempotencyKey: crypto.randomUUID(),
+          entryRevision: pendingEntry?.revision,
           selections: selections.map((selection) => ({ offerId: selection?.id, odds: selection?.odds })),
         }),
       });
-      if (!response.ok) throw new Error(await responseError(response));
+      if (!response.ok) {
+        const message = await responseError(response);
+        if (response.status === 423) {
+          await refreshState().catch(() => undefined);
+        }
+        throw new Error(message);
+      }
       const next = unwrapState(await response.json());
-      setState(next);
+      applyState(next);
       setDrafts((current) => ({ ...current, [pendingParticipant]: [] }));
       const name = state.participants.find((person) => person.id === pendingParticipant)?.name;
-      setToast(`${name ?? "参与者"}已锁定并加入奖池`);
+      setToast(
+        pendingEntry?.canEdit
+          ? `${name ?? "参与者"}的注单已更新并重新锁定`
+          : `${name ?? "参与者"}已锁定并加入奖池`,
+      );
       setSheet(null);
       setPendingParticipant(null);
     } catch (reason) {
@@ -604,7 +846,7 @@ export function PoolWorkbench() {
     setError(null);
     try {
       const response = await fetch("/api/results/sync", { method: "POST" });
-      if (!response.ok) throw new Error(await responseError(response));
+      await assertAdminResponse(response);
       await refreshState();
       setToast("已检查到期比赛，账本已刷新");
     } catch (reason) {
@@ -635,8 +877,8 @@ export function PoolWorkbench() {
           offers,
         }),
       });
-      if (!response.ok) throw new Error(await responseError(response));
-      setState(unwrapState(await response.json()));
+      await assertAdminResponse(response);
+      applyState(unwrapState(await response.json()));
       setToast(`已导入${offers.length}个赔率选项`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "赔率导入失败");
@@ -674,11 +916,44 @@ export function PoolWorkbench() {
           reason: "管理员核对数据源后录入",
         }),
       });
-      if (!response.ok) throw new Error(await responseError(response));
-      setState(unwrapState(await response.json()));
+      await assertAdminResponse(response);
+      applyState(unwrapState(await response.json()));
       setToast("90分钟赛果已锁定并完成结算");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "赛果保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setSelectedEntryUnlocked(entry: FixtureEntry, unlocked: boolean) {
+    if (!selectedFixture || !isActive) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "set-entry-edit-unlocked",
+          fixtureId: selectedFixture.id,
+          participantId: entry.participantId,
+          unlocked,
+        }),
+      });
+      await assertAdminResponse(response);
+      const next = unwrapState(await response.json());
+      applyState(next);
+      const name = state.participants.find((person) => person.id === entry.participantId)?.name;
+      setToast(
+        unlocked
+          ? `${name ?? "参与者"}的下注已单独解锁，可在卡片中修改`
+          : `${name ?? "参与者"}的下注已恢复锁定，原注单保持有效`,
+      );
+      setUnlockTarget(null);
+      setSheet("manage");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "解锁状态调整失败");
     } finally {
       setBusy(false);
     }
@@ -698,7 +973,14 @@ export function PoolWorkbench() {
         <div className="wb-brand"><span>球局</span><small>世界杯奖池</small></div>
         <div className="wb-top-actions">
           <button type="button" onClick={() => setSheet("rules")}>规则</button>
-          <button type="button" onClick={() => setSheet("manage")} aria-label="打开管理面板">管理</button>
+          <button
+            type="button"
+            disabled={adminBusy}
+            onClick={() => void openManage()}
+            aria-label="验证身份并打开管理面板"
+          >
+            {adminBusy ? "验证中" : "管理"}
+          </button>
         </div>
       </header>
 
@@ -707,8 +989,8 @@ export function PoolWorkbench() {
           <div className="wb-match-meta">
             <span>{selectedFixture.matchCode} · {STAGE_LABEL[selectedFixture.stage]}</span>
             <strong>{shanghaiDateTime(selectedFixture.kickoffAt)} 北京时间</strong>
-            <span className="wb-status" data-status={selectedFixture.id === state.activeFixtureId ? "active" : selectedFixture.status}>
-              {statusLabel(selectedFixture, state.activeFixtureId)}
+            <span className="wb-status" data-status={selectedFixture.id === locallyActiveFixtureId ? "active" : selectedFixture.status === "active" ? "locked" : selectedFixture.status}>
+              {statusLabel(selectedFixture, locallyActiveFixtureId)}
             </span>
           </div>
           <ApiSportsGameWidget
@@ -800,7 +1082,7 @@ export function PoolWorkbench() {
             {fixtures.map((fixture) => {
               const entries = state.entries.filter((entry) => entry.fixtureId === fixture.id);
               const bets = state.bets.filter((bet) => bet.fixtureId === fixture.id);
-              const active = fixture.id === state.activeFixtureId && fixture.isBettingOpen;
+              const active = fixture.id === locallyActiveFixtureId;
               const selected = fixture.id === selectedFixture.id;
               const emptyCopy = lockedCardCopy(fixture);
               return (
@@ -812,7 +1094,7 @@ export function PoolWorkbench() {
                 >
                   <header className="wb-card-head">
                     <div><b>{fixture.homeTeam.name} vs {fixture.awayTeam.name}</b><span>{shanghaiDateTime(fixture.kickoffAt)} · {STAGE_LABEL[fixture.stage]}</span></div>
-                    <span className="wb-card-lock">{active ? `${shanghaiTime(fixture.lockAt)} 锁定` : statusLabel(fixture, state.activeFixtureId)}</span>
+                    <span className="wb-card-lock">{active ? `${shanghaiTime(fixture.lockAt)} 锁定` : statusLabel(fixture, locallyActiveFixtureId)}</span>
                   </header>
                   <div className="wb-card-body">
                     {(entries.length > 0 || (active && activeDraftPeople.length > 0)) && (
@@ -820,7 +1102,7 @@ export function PoolWorkbench() {
                         <span>下注人</span><span>项目</span><span>赔率</span>
                       </div>
                     )}
-                    {entries.map((entry) => {
+                    {entries.filter((entry) => !(active && entry.canEdit)).map((entry) => {
                       const participant = state.participants.find((person) => person.id === entry.participantId);
                       const entryBets = bets.filter((bet) => bet.participantId === entry.participantId);
                       return (
@@ -852,14 +1134,21 @@ export function PoolWorkbench() {
 
                     {active && activeDraftPeople.map((person) => {
                       const slots = drafts[person.id] ?? [];
+                      const editingEntry = entries.find(
+                        (entry) => entry.participantId === person.id && entry.canEdit,
+                      );
                       return (
                         <div className="wb-draft" key={person.id}>
                           <div className="wb-draft-head">
                             <div>
                               <ParticipantAvatar participantId={person.id} className="wb-avatar-draft" />
-                              <strong>{person.name}<span>未锁定</span></strong>
+                              <strong>{person.name}<span>{editingEntry ? "管理员已解锁" : "未锁定"}</span></strong>
                             </div>
-                            <button type="button" onClick={() => setDrafts((current) => ({ ...current, [person.id]: [] }))}>移除</button>
+                            {editingEntry ? (
+                              <span className="wb-editing-badge">原注单仍有效</span>
+                            ) : (
+                              <button type="button" onClick={() => setDrafts((current) => ({ ...current, [person.id]: [] }))}>移除</button>
+                            )}
                           </div>
                           <div className="wb-draft-slots">
                             {slots.map((offer, slot) => (
@@ -869,8 +1158,18 @@ export function PoolWorkbench() {
                             ))}
                           </div>
                           <div className="wb-draft-actions">
+                            <button
+                              type="button"
+                              disabled={slots.length <= 1}
+                              onClick={() => setDrafts((current) => ({
+                                ...current,
+                                [person.id]: (current[person.id] ?? []).slice(0, -1),
+                              }))}
+                            >
+                              － 减一注
+                            </button>
                             <button type="button" disabled={slots.length >= 3} onClick={() => setDrafts((current) => ({ ...current, [person.id]: [...(current[person.id] ?? []), null] }))}>＋ 加一注</button>
-                            <button type="button" className="wb-lock-button" disabled={slots.some((offer) => !offer)} onClick={() => { setPendingParticipant(person.id); setSheet("confirm"); }}>锁定并加入奖池</button>
+                            <button type="button" className="wb-lock-button" disabled={slots.some((offer) => !offer)} onClick={() => { setPendingParticipant(person.id); setSheet("confirm"); }}>{editingEntry ? "重新锁定注单" : "锁定并加入奖池"}</button>
                           </div>
                         </div>
                       );
@@ -929,7 +1228,7 @@ export function PoolWorkbench() {
                 <p>{carriedIn > 0 ? `当前 ${money(fixturePool)} 全部来自上场滚入。` : "锁定注单后，金额和注数会显示在这里。"}</p>
               </div>
             )}
-            <p className="wb-pool-detail-note">仅统计已锁定参与人，未锁定的选择不计入奖池。</p>
+            <p className="wb-pool-detail-note">仅统计正式注单；管理员解锁编辑期间，原注单仍计入奖池。</p>
           </div>
         </DialogShell>
       )}
@@ -937,7 +1236,7 @@ export function PoolWorkbench() {
       {sheet === "people" && (
         <DialogShell title="选择参与人" eyebrow={`${selectedFixture.homeTeam.name} vs ${selectedFixture.awayTeam.name}`} onClose={() => setSheet(null)}>
           <div className="wb-sheet-body">
-            <p className="wb-sheet-note">每个人单独完成并锁定。锁定后不可修改，也不能重复加入。</p>
+            <p className="wb-sheet-note">每个人单独完成并锁定。锁定后仅管理员可在截止前为某个人开放修改。</p>
             <div className="wb-people-grid">
               {state.participants.map((person) => {
                 const locked = selectedEntries.some((entry) => entry.participantId === person.id);
@@ -975,7 +1274,7 @@ export function PoolWorkbench() {
                 </div>
                 {groupIndex === 1 && <p className="wb-market-help">让球结果按主队 -1 后的90分钟比分计算。</p>}
               </section>
-            )) : <div className="wb-no-offers"><b>本场赔率还未导入</b><p>请先在管理面板粘贴赔率 JSON。</p><button type="button" onClick={() => setSheet("manage")}>打开管理</button></div>}
+            )) : <div className="wb-no-offers"><b>本场赔率还未导入</b><p>请先在管理面板粘贴赔率 JSON。</p><button type="button" onClick={() => void openManage()}>打开管理</button></div>}
           </div>
           <footer className="wb-sheet-footer">
             <div><span>理论应返</span><strong>{pickedOfferId ? money(Math.round(1000 * (selectedFixture.offers.find((offer) => offer.id === pickedOfferId)?.odds ?? 0))) : "—"}</strong></div>
@@ -985,7 +1284,11 @@ export function PoolWorkbench() {
       )}
 
       {sheet === "confirm" && pendingParticipant && (
-        <DialogShell title="确认锁定" eyebrow="该操作不可撤回" onClose={() => setSheet(null)}>
+        <DialogShell
+          title={pendingEntry?.canEdit ? "确认重新锁定" : "确认锁定"}
+          eyebrow={pendingEntry?.canEdit ? "将以本次选择替换原注单" : "确认后正式加入本场奖池"}
+          onClose={() => setSheet(null)}
+        >
           <div className="wb-sheet-body">
             <div className="wb-confirm-person">
               <span>
@@ -998,15 +1301,95 @@ export function PoolWorkbench() {
               <strong>{drafts[pendingParticipant]?.length ?? 0}注 · {money((drafts[pendingParticipant]?.length ?? 0) * 1000)}</strong>
             </div>
             <div className="wb-confirm-list">{(drafts[pendingParticipant] ?? []).map((offer, index) => <p key={offer?.id ?? index}><span>{index + 1}. {offer?.label}</span><strong>{offer?.odds.toFixed(2)}</strong></p>)}</div>
-            <p className="wb-sheet-note">确认后，此人正式加入本场奖池。每注固定10元，赔率和选择将永久锁定。</p>
+            <p className="wb-sheet-note">
+              {pendingEntry?.canEdit
+                ? "重新锁定后才会原子替换原注单；在此之前，原注单始终有效并计入奖池。"
+                : "确认后，此人正式加入本场奖池。每注固定10元；截止前管理员可为此人单独解锁修改。"}
+            </p>
           </div>
-          <footer className="wb-sheet-footer wb-confirm-footer"><button type="button" disabled={busy} onClick={() => void lockEntry()}>{busy ? "正在锁定…" : "确认锁定并加入奖池"}</button></footer>
+          <footer className="wb-sheet-footer wb-confirm-footer"><button type="button" disabled={busy} onClick={() => void lockEntry()}>{busy ? "正在锁定…" : pendingEntry?.canEdit ? "确认更新并重新锁定" : "确认锁定并加入奖池"}</button></footer>
+        </DialogShell>
+      )}
+
+      {sheet === "admin-login" && (
+        <DialogShell
+          className="wb-admin-login-sheet"
+          title="管理员验证"
+          eyebrow="请输入4位管理密码"
+          initialFocusRef={adminPinInputRef}
+          onClose={() => {
+            setAdminPin("");
+            setAdminPinError(null);
+            setSheet(null);
+          }}
+        >
+          <form className="wb-admin-login" onSubmit={(event) => void authenticateAdmin(event)}>
+            <p>验证后可同步赛果、导入赔率和单独解锁下注。</p>
+            <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
+            <label htmlFor="wb-admin-pin">管理密码</label>
+            <input
+              ref={adminPinInputRef}
+              id="wb-admin-pin"
+              name="admin-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              pattern="[0-9]{4}"
+              maxLength={4}
+              value={adminPin}
+              onChange={(event) => {
+                setAdminPin(event.target.value.replace(/\D/g, "").slice(0, 4));
+                setAdminPinError(null);
+              }}
+              aria-invalid={Boolean(adminPinError)}
+              aria-describedby={adminPinError ? "wb-admin-pin-error" : undefined}
+            />
+            {adminPinError && <p className="wb-admin-login-error" id="wb-admin-pin-error" role="alert">{adminPinError}</p>}
+            <button type="submit" disabled={adminBusy || adminPin.length !== 4}>
+              {adminBusy ? "正在验证…" : "进入管理"}
+            </button>
+          </form>
         </DialogShell>
       )}
 
       {sheet === "manage" && (
         <DialogShell title="本场管理" eyebrow={`${selectedFixture.matchCode} · ${selectedFixture.homeTeam.name} vs ${selectedFixture.awayTeam.name}`} onClose={() => setSheet(null)}>
           <div className="wb-sheet-body wb-manage-body">
+            <section className="wb-admin-unlock">
+              <header>
+                <div><h3>下注解锁</h3><p>只影响所选参与人，其他人的下注不变。</p></div>
+                <span>{isActive ? `可调整至 ${shanghaiTime(selectedFixture.lockAt)}` : "当前不可调整"}</span>
+              </header>
+              {isActive ? (
+                participantBreakdown.length ? (
+                  <ul>
+                    {participantBreakdown.map((entry) => (
+                      <li key={entry.id}>
+                        <span>
+                          <ParticipantAvatar participantId={entry.participantId} className="wb-avatar-admin" />
+                          <span><b>{entry.name}</b><small>{money(entry.stakeCents)} · {entry.betCount}注{entry.canEdit ? " · 编辑中" : ""}</small></span>
+                        </span>
+                        <button
+                          type="button"
+                          className={entry.canEdit ? "is-unlocked" : ""}
+                          disabled={busy}
+                          onClick={() => {
+                            setUnlockTarget(entry.participantId);
+                            setSheet("unlock-confirm");
+                          }}
+                        >
+                          {entry.canEdit ? "恢复锁定" : "解锁编辑"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="wb-admin-unlock-empty">当前比赛还没有已锁定参与人。</p>
+                )
+              ) : (
+                <p className="wb-admin-unlock-empty">只可调整当前开放投注的比赛。请切换到“开放下注”的比赛后再操作。</p>
+              )}
+            </section>
             <section className="wb-admin-section"><div><h3>赛果同步</h3><p>到达预设抓取时间后检查已配置数据源；数据源可随时替换。</p></div><button type="button" disabled={busy} onClick={() => void syncResults()}>立即检查</button></section>
             <section className="wb-admin-form"><h3>导入赔率 JSON</h3><textarea aria-label="赔率 JSON" value={oddsJson} onChange={(event) => setOddsJson(event.target.value)} spellCheck={false} /><button type="button" disabled={busy} onClick={() => void importOdds()}>导入到当前比赛</button></section>
             <section className="wb-admin-form"><h3>人工复核比分</h3><p>半场比分用于半全场玩法；结算比分始终只填90分钟＋伤停补时。</p><div className="wb-score-inputs"><label>半场主队<input inputMode="numeric" value={halfHome} onChange={(event) => setHalfHome(event.target.value)} placeholder="可空" /></label><label>半场客队<input inputMode="numeric" value={halfAway} onChange={(event) => setHalfAway(event.target.value)} placeholder="可空" /></label><label>90′主队<input inputMode="numeric" value={fullHome} onChange={(event) => setFullHome(event.target.value)} placeholder="0" /></label><label>90′客队<input inputMode="numeric" value={fullAway} onChange={(event) => setFullAway(event.target.value)} placeholder="0" /></label></div><button type="button" disabled={busy} onClick={() => void saveManualResult()}>复核并锁定赛果</button></section>
@@ -1014,10 +1397,49 @@ export function PoolWorkbench() {
         </DialogShell>
       )}
 
+      {sheet === "unlock-confirm" && unlockTargetEntry && (
+        <DialogShell
+          title={!isActive
+            ? "本场已到固定锁定时间"
+            : unlockTargetEntry.canEdit
+              ? "恢复锁定这份下注？"
+              : `解锁${state.participants.find((person) => person.id === unlockTarget)?.name ?? "该参与人"}的下注？`}
+          eyebrow={`${selectedFixture.matchCode} · ${isActive ? "仅影响此人" : "下注不再可调整"}`}
+          onClose={() => setSheet("manage")}
+        >
+          <div className="wb-sheet-body">
+            <div className="wb-confirm-person">
+              <span>
+                <ParticipantAvatar participantId={unlockTargetEntry.participantId} className="wb-avatar-confirm" />
+                <b>{state.participants.find((person) => person.id === unlockTargetEntry.participantId)?.name}</b>
+              </span>
+              <strong>{unlockTargetEntry.betCount}注 · {money(unlockTargetEntry.stakeCents)}</strong>
+            </div>
+            <div className="wb-confirm-list">
+              {state.bets
+                .filter((bet) => bet.fixtureId === selectedFixture.id && bet.participantId === unlockTargetEntry.participantId)
+                .map((bet, index) => <p key={bet.id}><span>{index + 1}. {bet.label}</span><strong>{bet.odds.toFixed(2)}</strong></p>)}
+            </div>
+            <p className="wb-sheet-note">
+              {!isActive
+                ? "固定锁定时间已到，原注单保持有效；当前不能再改变任何人的解锁状态。"
+                : unlockTargetEntry.canEdit
+                ? "恢复锁定会关闭此人的编辑权限，原注单继续有效；其他参与人的下注不受影响。"
+                : "解锁后原注单仍然有效并计入奖池；只有此人重新锁定时才会替换。其他参与人的下注不受影响。"}
+            </p>
+          </div>
+          <footer className="wb-sheet-footer wb-confirm-footer">
+            <button type="button" disabled={busy || !isActive} onClick={() => void setSelectedEntryUnlocked(unlockTargetEntry, !unlockTargetEntry.canEdit)}>
+              {!isActive ? "已固定锁定" : busy ? "正在调整…" : unlockTargetEntry.canEdit ? "确认恢复锁定" : "确认单独解锁"}
+            </button>
+          </footer>
+        </DialogShell>
+      )}
+
       {sheet === "rules" && (
         <DialogShell title="奖池规则" eyebrow="简单、透明、无庄家风险" onClose={() => setSheet(null)}>
           <div className="wb-sheet-body wb-rules">
-            <ol><li><b>每注固定10元</b><span>每人每场1–3注；个人点击锁定后才正式加入奖池。</span></li><li><b>赔率不设上下限</b><span>中奖彩票理论奖金 = 10元 × 锁定赔率。</span></li><li><b>只看90分钟</b><span>常规时间与伤停补时有效，不含加时赛及点球大战。</span></li><li><b>奖池不足同比缩放</b><span>所有中奖者按理论奖金占比同比例折算，任何人都不用补钱。</span></li><li><b>剩余自动滚存</b><span>本场支付后仍有余额，则全额进入下一场奖池。</span></li><li><b>锁定不可修改</b><span>赔率、选项和注数以锁定时记录为准。</span></li></ol>
+            <ol><li><b>每注固定10元</b><span>每人每场1–3注；个人点击锁定后才正式加入奖池。</span></li><li><b>赔率不设上下限</b><span>中奖彩票理论奖金 = 10元 × 锁定赔率。</span></li><li><b>只看90分钟</b><span>常规时间与伤停补时有效，不含加时赛及点球大战。</span></li><li><b>奖池不足同比缩放</b><span>所有中奖者按理论奖金占比同比例折算，任何人都不用补钱。</span></li><li><b>剩余自动滚存</b><span>本场支付后仍有余额，则全额进入下一场奖池。</span></li><li><b>逐人解锁修改</b><span>固定锁定时间前，管理员可只为某个人开放修改；重新锁定前原注单仍有效。</span></li></ol>
           </div>
         </DialogShell>
       )}

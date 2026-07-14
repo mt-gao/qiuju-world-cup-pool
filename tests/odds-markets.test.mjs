@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createSeedState,
   deriveFixtureStates,
+  isFixtureBettingWindowOpen,
   gradeSelection,
   matchScoreValidationError,
   normalizeApiFootballFixture,
@@ -207,5 +208,19 @@ test("keeps later fixtures locked until the prior fixture settles", () => {
     placeholdersRemainLocked.activeFixtureId,
     null,
     "active odds must not unlock a fixture whose teams are placeholders",
+  );
+});
+
+test("the betting window closes exactly at the fixed lock time", () => {
+  const seed = createSeedState("2026-07-14T12:00:00+08:00");
+  const fixture = seed.fixtures[0];
+
+  assert.equal(
+    isFixtureBettingWindowOpen(fixture, "2026-07-15T00:59:59.999+08:00"),
+    true,
+  );
+  assert.equal(
+    isFixtureBettingWindowOpen(fixture, "2026-07-15T01:00:00+08:00"),
+    false,
   );
 });
