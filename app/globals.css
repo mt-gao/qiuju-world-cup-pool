@@ -541,7 +541,7 @@ api-sports-widget[data-theme="WorldCup"] {
   white-space: nowrap;
 }
 
-.wb-win-badge {
+.wb-placement-badge {
   display: inline-grid;
   min-width: 24px;
   height: 16px;
@@ -556,6 +556,40 @@ api-sports-widget[data-theme="WorldCup"] {
   font-weight: 950;
   letter-spacing: 0.04em;
   line-height: 1;
+}
+
+.wb-placement-badge[data-placement="2nd"] {
+  border-color: oklch(0.91 0.012 105 / 0.72);
+  background: oklch(0.84 0.012 105);
+  color: oklch(0.25 0.02 155);
+}
+
+.wb-placement-badge[data-placement="3rd"] {
+  border-color: oklch(0.78 0.09 58 / 0.76);
+  background: oklch(0.67 0.1 58);
+  color: oklch(0.2 0.03 45);
+}
+
+.wb-placement-badge[data-placement="4th"] {
+  border-color: oklch(1 0 0 / 0.32);
+  background: oklch(1 0 0 / 0.08);
+  color: oklch(0.93 0.01 105);
+}
+
+.wb-trophy-badge {
+  min-width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.wb-trophy-icon {
+  width: 14px;
+  height: 20px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px oklch(0.08 0.02 155 / 0.55));
+  image-rendering: pixelated;
 }
 
 .wb-flag {

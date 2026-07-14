@@ -303,7 +303,7 @@ test("manual knockout entry opens at T+3 and derives the winner from dynamic sco
   assert.doesNotMatch(manualRoute, /payload\.winnerSide/);
 });
 
-test("local result cards show the final on-field score and one shoot-out detail", async () => {
+test("local result cards show final scores, stage placements, and one shoot-out detail", async () => {
   const workbench = await readFile(
     new URL("../app/components/PoolWorkbench.tsx", import.meta.url),
     "utf8",
@@ -311,8 +311,13 @@ test("local result cards show the final on-field score and one shoot-out detail"
   const localCardStart = workbench.indexOf("function LocalMatchCard(");
   const localCardEnd = workbench.indexOf("function DialogShell(", localCardStart);
   const localCard = workbench.slice(localCardStart, localCardEnd);
+  const placementStart = workbench.indexOf("function MatchPlacementBadge(");
+  const placementEnd = workbench.indexOf("function LocalMatchCard(", placementStart);
+  const placementBadge = workbench.slice(placementStart, placementEnd);
 
   assert.ok(localCardStart >= 0 && localCardEnd > localCardStart);
+  assert.ok(placementStart >= 0 && placementEnd > placementStart);
+  await access(new URL("../public/pixel-world-cup-trophy.png", import.meta.url));
   assert.match(localCard, /fixture\.afterExtraTimeScore/);
   assert.match(localCard, /fixture\.penaltyShootoutScore/);
   assert.match(
@@ -327,12 +332,15 @@ test("local result cards show the final on-field score and one shoot-out detail"
   );
   assert.match(
     localCard,
-    /\? `点球 \$\{penalties\.home\}:\$\{penalties\.away\}`\s*:\s*winner/,
+    /\? `点球 \$\{penalties\.home\}:\$\{penalties\.away\}`\s*:\s*winnerText/,
     "the shoot-out line should contain only the shoot-out score",
   );
   assert.match(localCard, /className=\{penalties \? "wb-shootout-score" : undefined\}/);
-  assert.match(localCard, /fixture\.winnerSide === "home"[\s\S]*?wb-win-badge[\s\S]*?WIN/);
-  assert.match(localCard, /fixture\.winnerSide === "away"[\s\S]*?wb-win-badge[\s\S]*?WIN/);
+  assert.match(localCard, /<MatchPlacementBadge fixture=\{fixture\} side="home" \/>/);
+  assert.match(localCard, /<MatchPlacementBadge fixture=\{fixture\} side="away" \/>/);
+  assert.match(placementBadge, /fixture\.stage === "semi_final"[\s\S]*?WIN/);
+  assert.match(placementBadge, /fixture\.stage === "final" && isWinner[\s\S]*?pixel-world-cup-trophy\.png/);
+  assert.match(placementBadge, /fixture\.stage === "final" \? "2nd" : isWinner \? "3rd" : "4th"/);
   assert.doesNotMatch(localCard, /decidingScore|<small>/);
 
   const primaryScoreStart = localCard.indexOf("<strong");
@@ -348,6 +356,10 @@ test("local result cards show the final on-field score and one shoot-out detail"
   assert.match(resultTicker, /90分钟赛果/);
   assert.match(resultTicker, /加时后/);
   assert.match(resultTicker, /点球/);
+  assert.match(resultTicker, /winnerAnnouncement/);
+  assert.match(workbench, /fixture\.stage === "semi_final"\) return `\$\{teamName\}晋级`/);
+  assert.match(workbench, /fixture\.stage === "third_place"\) return `\$\{teamName\}获胜`/);
+  assert.match(workbench, /return `\$\{teamName\}夺冠`/);
 });
 
 test("backend settlement grades money only from half-time and 90-minute scores", async () => {

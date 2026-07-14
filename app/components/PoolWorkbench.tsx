@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -306,6 +307,73 @@ function Flag({ code, label }: { code: string; label: string }) {
   );
 }
 
+function fixtureWinnerText(fixture: Fixture, teamName: string) {
+  if (fixture.stage === "semi_final") return `${teamName}晋级`;
+  if (fixture.stage === "third_place") return `${teamName}获胜`;
+  return `${teamName}夺冠`;
+}
+
+function MatchPlacementBadge({
+  fixture,
+  side,
+}: {
+  fixture: Fixture;
+  side: Exclude<Fixture["winnerSide"], null>;
+}) {
+  if (!fixture.winnerSide) return null;
+
+  const isWinner = fixture.winnerSide === side;
+  const team = side === "home" ? fixture.homeTeam : fixture.awayTeam;
+
+  if (fixture.stage === "semi_final") {
+    if (!isWinner) return null;
+    return (
+      <span
+        className="wb-placement-badge"
+        data-placement="win"
+        aria-label={`${team.name}晋级`}
+      >
+        WIN
+      </span>
+    );
+  }
+
+  if (fixture.stage === "final" && isWinner) {
+    return (
+      <span
+        className="wb-placement-badge wb-trophy-badge"
+        data-placement="champion"
+        aria-label={`${team.name}夺冠`}
+      >
+        <Image
+          className="wb-trophy-icon"
+          src="/pixel-world-cup-trophy.png"
+          alt=""
+          width={14}
+          height={20}
+          aria-hidden="true"
+        />
+      </span>
+    );
+  }
+
+  const placement = fixture.stage === "final" ? "2nd" : isWinner ? "3rd" : "4th";
+  const placementLabel =
+    fixture.stage === "final"
+      ? `${team.name}亚军`
+      : `${team.name}${isWinner ? "第三名" : "第四名"}`;
+
+  return (
+    <span
+      className="wb-placement-badge"
+      data-placement={placement.toLowerCase()}
+      aria-label={placementLabel}
+    >
+      {placement}
+    </span>
+  );
+}
+
 function LocalMatchCard({
   fixture,
   mode,
@@ -322,11 +390,12 @@ function LocalMatchCard({
       ? fixture.homeTeam
       : fixture.awayTeam
     : null;
+  const winnerText = winner ? fixtureWinnerText(fixture, winner.name) : null;
   const scoreNote = displayScore
     ? penalties
       ? `点球 ${penalties.home}:${penalties.away}`
-      : winner
-        ? `${winner.name}晋级`
+      : winnerText
+        ? winnerText
         : result?.home === result?.away
           ? "90分钟已结算 · 等待最终胜者"
           : "90分钟比分 · 本地记录"
@@ -342,11 +411,7 @@ function LocalMatchCard({
     <div className="wb-matchup" data-local-result={mode === "completed" || undefined}>
       <div className="wb-team wb-team-home">
         <Flag code={fixture.homeTeam.code} label={fixture.homeTeam.name} />
-        {fixture.winnerSide === "home" && (
-          <span className="wb-win-badge" aria-label={`${fixture.homeTeam.name}获胜`}>
-            WIN
-          </span>
-        )}
+        <MatchPlacementBadge fixture={fixture} side="home" />
         <b>{fixture.homeTeam.name}</b>
       </div>
       <div className="wb-score">
@@ -361,11 +426,7 @@ function LocalMatchCard({
       </div>
       <div className="wb-team wb-team-away">
         <Flag code={fixture.awayTeam.code} label={fixture.awayTeam.name} />
-        {fixture.winnerSide === "away" && (
-          <span className="wb-win-badge" aria-label={`${fixture.awayTeam.name}获胜`}>
-            WIN
-          </span>
-        )}
+        <MatchPlacementBadge fixture={fixture} side="away" />
         <b>{fixture.awayTeam.name}</b>
       </div>
     </div>
@@ -1443,19 +1504,27 @@ export function PoolWorkbench() {
     ledgerReady && nextFixture && selectedFixture.id === nextFixture.id,
   );
   const result = selectedFixture.regularTimeScore;
-  const advancingTeam = selectedFixture.winnerSide
+  const winnerTeam = selectedFixture.winnerSide
     ? selectedFixture.winnerSide === "home"
       ? selectedFixture.homeTeam
       : selectedFixture.awayTeam
     : null;
-  const resultOutcome = result ? (result.home > result.away ? `${selectedFixture.homeTeam.name}胜` : result.home < result.away ? `${selectedFixture.awayTeam.name}胜` : "平局") : "";
+  const winnerAnnouncement = winnerTeam
+    ? fixtureWinnerText(selectedFixture, winnerTeam.name)
+    : "";
+  const resultOutcome = result
+    ? result.home === result.away
+      ? "平局"
+      : winnerAnnouncement ||
+        `${result.home > result.away ? selectedFixture.homeTeam.name : selectedFixture.awayTeam.name}胜`
+    : "";
   const knockoutResolution = selectedFixture.penaltyShootoutScore
     ? ` · 加时后 ${selectedFixture.afterExtraTimeScore?.home ?? result?.home}:${selectedFixture.afterExtraTimeScore?.away ?? result?.away} · 点球 ${selectedFixture.penaltyShootoutScore.home}:${selectedFixture.penaltyShootoutScore.away}`
     : selectedFixture.afterExtraTimeScore
       ? ` · 加时后 ${selectedFixture.afterExtraTimeScore.home}:${selectedFixture.afterExtraTimeScore.away}`
       : "";
   const tickerText = result
-    ? `90分钟赛果 · ${result.home}:${result.away} · ${resultOutcome}${knockoutResolution}${result.home === result.away && advancingTeam ? ` · ${advancingTeam.name}晋级` : ""} · 奖池总进球 ${result.home + result.away} · 结算不含加时与点球`
+    ? `90分钟赛果 · ${result.home}:${result.away} · ${resultOutcome}${knockoutResolution}${result.home === result.away && winnerAnnouncement ? ` · ${winnerAnnouncement}` : ""} · 奖池总进球 ${result.home + result.away} · 结算不含加时与点球`
     : "";
 
   return (
