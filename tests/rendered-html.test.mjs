@@ -153,6 +153,11 @@ test("completed fixtures open local history in a dedicated layer while the provi
   assert.match(workbench, /setHistoryFixtureId\(fixtureId\);[\s\S]*?setSheet\("history"\)/);
   assert.match(workbench, /sheet === "history" && historyFixture[\s\S]*?betSettlementLabel\(bet\)/);
   assert.match(workbench, /money\(bet\.stakeCents\)[\s\S]*?bet\.odds\.toFixed\(2\)/);
+  assert.match(workbench, /className="wb-history-bet" data-status=\{bet\.status\}/);
+  assert.match(workbench, /wb-history-result-mark[\s\S]*?betSettlementMark\(bet\.status\)/);
+  assert.match(css, /\.wb-history-bet\[data-status="won"\][\s\S]*?background:/);
+  assert.match(css, /\.wb-history-bet dd\[data-status="won"\][\s\S]*?var\(--pitch-deep\)/);
+  assert.match(css, /\.wb-history-bet dd\[data-status="lost"\][\s\S]*?background:/);
   assert.match(workbench, /bet\.theoreticalPayoutCents !== bet\.payoutCents/);
   assert.match(workbench, /selectedFixture\.recordStatus === "settled"[\s\S]*?<PoolPodium/);
   assert.match(css, /\.wb-ranking-wrap\s*\{[\s\S]*?max-height:\s*none;[\s\S]*?overflow-y:\s*visible/);
@@ -160,6 +165,10 @@ test("completed fixtures open local history in a dedicated layer while the provi
   assert.match(css, /\.wb-history-trigger\s*\{[\s\S]*?min-height:\s*44px/);
   assert.match(css, /data-selected-presentation="completed"\][\s\S]*?flex:\s*0 0 122px/);
   assert.match(css, /\.wb-history-sheet\s*\{/);
+  assert.match(workbench, /const hasExplicitFixtureSelection = useRef\(false\)/);
+  assert.match(workbench, /next\.nextFixtureId \?\?[\s\S]*?recordStatus !== "settled"/);
+  assert.match(workbench, /if \(!hasExplicitFixtureSelection\.current\)[\s\S]*?centerFixtureCard/);
+  assert.match(workbench, /onPointerDownCapture=\{markCarouselInteraction\}/);
   assert.doesNotMatch(
     css,
     /\.wb-fixture-card\.is-readonly[^}]*pointer-events:\s*none/,

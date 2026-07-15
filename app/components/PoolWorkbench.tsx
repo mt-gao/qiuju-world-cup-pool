@@ -113,6 +113,26 @@ function betSettlementLabel(bet: Bet): string {
   return "待结算";
 }
 
+function betSettlementMark(status: Bet["status"]): string {
+  if (status === "won") return "✓";
+  if (status === "lost") return "×";
+  if (status === "void") return "↩";
+  if (status === "review_required") return "!";
+  return "·";
+}
+
+function centerFixtureCard(track: HTMLDivElement, fixtureId: string): void {
+  const element = [...track.querySelectorAll<HTMLElement>("[data-fixture-id]")]
+    .find((candidate) => candidate.dataset.fixtureId === fixtureId);
+  if (!element) return;
+
+  const trackBox = track.getBoundingClientRect();
+  const cardBox = element.getBoundingClientRect();
+  const offset = cardBox.left + cardBox.width / 2 - (trackBox.left + trackBox.width / 2);
+  if (Math.abs(offset) < 1) return;
+  track.scrollBy({ left: offset, behavior: "auto" });
+}
+
 function shanghaiDateTime(iso: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
@@ -625,6 +645,7 @@ export function PoolWorkbench() {
   const scrollFrame = useRef<number | null>(null);
   const scrollSettleTimer = useRef<number | null>(null);
   const requestedScrollFixtureId = useRef<string | null>(null);
+  const hasExplicitFixtureSelection = useRef(false);
   const stateRef = useRef(state);
   const syncInFlightRef = useRef(false);
   const lastResultSyncAtRef = useRef(0);
@@ -835,16 +856,29 @@ export function PoolWorkbench() {
 
     const receivedAt = Date.now();
     setSelectedFixtureId((current) => {
-      const fallback = next.nextFixtureId ?? next.fixtures.at(-1)?.id ?? null;
+      const orderedFixtures = [...next.fixtures].sort((a, b) => a.sequence - b.sequence);
+      const fallback =
+        next.nextFixtureId ??
+        orderedFixtures.find((fixture) => fixture.recordStatus !== "settled")?.id ??
+        orderedFixtures.at(-1)?.id ??
+        null;
+      const currentStillExists = current
+        ? next.fixtures.some((fixture) => fixture.id === current)
+        : false;
+      const shouldFollowProgression =
+        !hasExplicitFixtureSelection.current ||
+        current === null ||
+        !currentStillExists ||
+        Boolean(
+          previousNextFixtureId &&
+          current === previousNextFixtureId &&
+          previousNextFixtureId !== next.nextFixtureId &&
+          next.nextFixtureId,
+        );
       const target =
-        current === null
+        shouldFollowProgression
           ? fallback
-          : previousNextFixtureId &&
-              current === previousNextFixtureId &&
-              previousNextFixtureId !== next.nextFixtureId &&
-              next.nextFixtureId
-            ? next.nextFixtureId
-            : current;
+          : current;
       if (target && target !== current) requestedScrollFixtureId.current = target;
       return target;
     });
@@ -1016,16 +1050,10 @@ export function PoolWorkbench() {
       requestedScrollFixtureId.current !== selectedFixtureId
     ) return;
     const track = trackRef.current;
-    const element = trackRef.current?.querySelector<HTMLElement>(`[data-fixture-id="${selectedFixtureId}"]`);
-    if (!track || !element) return;
+    if (!track) return;
     didInitialScroll.current = true;
     requestedScrollFixtureId.current = null;
-    const trackBox = track.getBoundingClientRect();
-    const cardBox = element.getBoundingClientRect();
-    track.scrollBy({
-      left: cardBox.left + cardBox.width / 2 - (trackBox.left + trackBox.width / 2),
-      behavior: "auto",
-    });
+    centerFixtureCard(track, selectedFixtureId);
   }, [selectedFixtureId, fixtures.length]);
 
   useEffect(() => () => {
@@ -1050,6 +1078,10 @@ export function PoolWorkbench() {
         scrollFrame.current = null;
         const track = trackRef.current;
         if (!track) return;
+        if (!hasExplicitFixtureSelection.current) {
+          if (selectedFixtureId) centerFixtureCard(track, selectedFixtureId);
+          return;
+        }
         const trackBox = track.getBoundingClientRect();
         const center = trackBox.left + trackBox.width / 2;
         const cards = [...track.querySelectorAll<HTMLElement>("[data-fixture-id]")];
@@ -1074,7 +1106,12 @@ export function PoolWorkbench() {
     setSheet(null);
   }
 
+  function markCarouselInteraction() {
+    hasExplicitFixtureSelection.current = true;
+  }
+
   function openBetHistory(fixtureId: string) {
+    hasExplicitFixtureSelection.current = true;
     setSelectedFixtureId(fixtureId);
     setHistoryFixtureId(fixtureId);
     setSheet("history");
@@ -1442,6 +1479,7 @@ export function PoolWorkbench() {
       });
       await assertAdminResponse(response);
       const settledFixtureId = fixture.id;
+      hasExplicitFixtureSelection.current = true;
       applyState(unwrapState(await response.json()));
       requestedScrollFixtureId.current = settledFixtureId;
       setSelectedFixtureId(settledFixtureId);
@@ -1480,6 +1518,7 @@ export function PoolWorkbench() {
       });
       await assertAdminResponse(response);
       const next = unwrapState(await response.json());
+      hasExplicitFixtureSelection.current = true;
       applyState(next);
       requestedScrollFixtureId.current = fixture.id;
       setSelectedFixtureId(fixture.id);
@@ -1677,7 +1716,14 @@ export function PoolWorkbench() {
             <div><h2 id="wb-carousel-title">参与卡片</h2><p>左右滑动切换比赛，上方信息同步更新</p></div>
             <div className="wb-dots" aria-label="比赛页码">{fixtures.map((fixture) => <span key={fixture.id} className={fixture.id === selectedFixture.id ? "is-current" : ""} />)}</div>
           </div>
-          <div className="wb-fixture-track" ref={trackRef} onScroll={handleTrackScroll}>
+          <div
+            className="wb-fixture-track"
+            ref={trackRef}
+            onScroll={handleTrackScroll}
+            onPointerDownCapture={markCarouselInteraction}
+            onWheelCapture={markCarouselInteraction}
+            onKeyDownCapture={markCarouselInteraction}
+          >
             {fixtures.map((fixture) => {
               const entries = state.entries.filter((entry) => entry.fixtureId === fixture.id);
               const bets = state.bets.filter((bet) => bet.fixtureId === fixture.id);
@@ -1691,7 +1737,9 @@ export function PoolWorkbench() {
                   key={fixture.id}
                   data-fixture-id={fixture.id}
                   data-presentation={mode}
-                  onFocus={() => setSelectedFixtureId(fixture.id)}
+                  onFocus={() => {
+                    if (hasExplicitFixtureSelection.current) setSelectedFixtureId(fixture.id);
+                  }}
                 >
                   <header className="wb-card-head">
                     <div><b>{fixture.homeTeam.name} vs {fixture.awayTeam.name}</b><span>{shanghaiDateTime(fixture.kickoffAt)} · {STAGE_LABEL[fixture.stage]}</span></div>
@@ -1867,7 +1915,7 @@ export function PoolWorkbench() {
                     </header>
                     <div className="wb-history-bets">
                       {entry.bets.map((bet, index) => (
-                        <div className="wb-history-bet" key={bet.id}>
+                        <div className="wb-history-bet" data-status={bet.status} key={bet.id}>
                           <div className="wb-history-bet-title">
                             <span aria-hidden="true">{index + 1}</span>
                             <span>
@@ -1878,7 +1926,15 @@ export function PoolWorkbench() {
                           <dl>
                             <div><dt>投入</dt><dd>{money(bet.stakeCents)}</dd></div>
                             <div><dt>锁定赔率</dt><dd>{bet.odds.toFixed(2)}</dd></div>
-                            <div><dt>结算结果</dt><dd data-status={bet.status}>{betSettlementLabel(bet)}</dd></div>
+                            <div>
+                              <dt>结算结果</dt>
+                              <dd data-status={bet.status}>
+                                <span className="wb-history-result-mark" aria-hidden="true">
+                                  {betSettlementMark(bet.status)}
+                                </span>
+                                <span>{betSettlementLabel(bet)}</span>
+                              </dd>
+                            </div>
                           </dl>
                           {bet.status === "won" && bet.theoreticalPayoutCents !== bet.payoutCents && (
                             <p className="wb-history-adjustment">
