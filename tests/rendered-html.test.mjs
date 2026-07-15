@@ -60,7 +60,7 @@ test("pool workbench includes avatar bets, frozen regulation score, and podium U
   assert.match(avatarData, /\/avatars\/gao\.png/);
   assert.deepEqual(
     avatarFiles.filter((name) => name.endsWith(".png")).sort(),
-    ["bo.png", "dong.png", "gao.png", "kang.png", "qiu.png", "ye.png", "zhao.png"],
+    ["bo.png", "dong.png", "gao.png", "kang.png", "qiu.png", "yangge.png", "ye.png", "zhao.png"],
   );
 });
 

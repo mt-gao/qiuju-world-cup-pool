@@ -35,7 +35,8 @@ export type ParticipantId =
   | "qiu"
   | "kang"
   | "bo"
-  | "zhao";
+  | "zhao"
+  | "yangge";
 
 export interface Participant {
   id: ParticipantId;
@@ -623,6 +624,7 @@ export const PARTICIPANTS: readonly Participant[] = [
   { id: "kang", name: "康哥", displayOrder: 5, active: true },
   { id: "bo", name: "波哥", displayOrder: 6, active: true },
   { id: "zhao", name: "兆", displayOrder: 7, active: true },
+  { id: "yangge", name: "洋哥", displayOrder: 8, active: true },
 ] as const;
 
 type SeedFixture = Omit<

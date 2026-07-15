@@ -8,6 +8,7 @@ const AVATAR_SRC: Record<ParticipantId, string> = {
   kang: "/avatars/kang.png",
   bo: "/avatars/bo.png",
   zhao: "/avatars/zhao.png",
+  yangge: "/avatars/yangge.png",
 };
 
 export function participantAvatarSrc(participantId: ParticipantId): string {

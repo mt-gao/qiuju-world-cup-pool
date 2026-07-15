@@ -1685,10 +1685,10 @@ export function PoolWorkbench() {
               className="wb-stat-link"
               type="button"
               aria-haspopup="dialog"
-              aria-label={`参与人数${selectedEntries.length}人，共7人，查看参与明细`}
+              aria-label={`参与人数${selectedEntries.length}人，共${state.participants.length}人，查看参与明细`}
               onClick={() => setSheet("pool")}
             >
-              <span>参与人数</span><strong>{selectedEntries.length}<small> / 7</small></strong>
+              <span>参与人数</span><strong>{selectedEntries.length}<small> / {state.participants.length}</small></strong>
             </button>
             <div><span>{selectedFixture.settlement ? "本场滚存" : "上场滚入"}</span><strong>{money(rollover)}</strong></div>
           </div>
@@ -1853,7 +1853,7 @@ export function PoolWorkbench() {
 
                         {active && (
                           <button className="wb-add-person" type="button" onClick={() => setSheet("people")}>
-                            <span>＋</span><b>添加参与人</b><small>七人中选择，完成1–3注后单独锁定</small>
+                            <span>＋</span><b>添加参与人</b><small>{state.participants.length}人中选择，完成1–3注后单独锁定</small>
                           </button>
                         )}
                         {!active && entries.length === 0 && (
