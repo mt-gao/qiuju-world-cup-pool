@@ -219,12 +219,17 @@ test("admin PIN and per-person edit unlock remain server-authorized", async () =
   assert.match(workbench, /fetch\("\/api\/admin\/session"/);
   assert.doesNotMatch(workbench, /6666/, "the default PIN must not be shipped in client code");
   assert.match(workbench, /set-entry-edit-unlocked/);
+  assert.match(workbench, /action: "remove-entry"/);
+  assert.match(workbench, /确认移除全部下注/);
   assert.match(workbench, /原注单仍然有效并计入奖池/);
 
   const guard = stateRoute.indexOf("await hasValidAdminSession(request)");
+  const removeGuard = stateRoute.indexOf('payload.action === "remove-entry"');
   const databaseOpen = stateRoute.indexOf("const db = getDb();", guard);
   assert.ok(guard >= 0 && databaseOpen > guard, "admin mutations must authenticate before opening the database");
+  assert.ok(removeGuard >= 0 && removeGuard < guard, "entry removal must require the admin session");
   assert.match(stateRoute, /db\.transaction/);
+  assert.match(stateRoute, /\.delete\(fixtureEntries\)/);
   assert.match(syncRoute, /POST\(request: Request\)[\s\S]*hasValidAdminSession/);
   assert.match(schema, /editUnlockedAt:[\s\S]*revision:/);
 

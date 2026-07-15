@@ -1363,11 +1363,8 @@ api-sports-widget[data-theme="WorldCup"] {
   font-weight: 800;
 }
 
-.wb-editing-badge {
-  padding-right: 4px;
-  color: var(--pitch-deep);
-  font-size: 8px;
-  font-weight: 850;
+.wb-draft-head .wb-remove-entry-button {
+  color: var(--alert);
 }
 
 .wb-draft-slots {
@@ -2400,6 +2397,10 @@ api-sports-widget[data-theme="WorldCup"] {
 
 .wb-confirm-footer button {
   width: 100%;
+}
+
+.wb-confirm-footer .wb-remove-confirm-button {
+  background: var(--alert);
 }
 
 .wb-manage-body {

@@ -36,6 +36,7 @@ import {
   type OddsOffer,
   type ParticipantId,
   type RegulationScore,
+  type RemoveEntryRequest,
   type SetEntryEditUnlockedRequest,
   type Settlement,
   type StateMutationRequest,
@@ -801,6 +802,77 @@ async function setEntryEditUnlocked(
     );
 }
 
+async function removeEntry(
+  db: Database,
+  payload: RemoveEntryRequest,
+  now: string,
+) {
+  const participantId = validateParticipantId(payload.participantId);
+  if (typeof payload.entryId !== "string" || !payload.entryId.trim()) {
+    badRequest("entryId 不能为空。", 400);
+  }
+  if (!Number.isSafeInteger(payload.entryRevision)) {
+    badRequest("entryRevision 必须是有效整数。", 400);
+  }
+
+  const fixtureRows = await db.select().from(fixtures).orderBy(asc(fixtures.sequence));
+  const activeFixture = activeFixtureForRows(fixtureRows, now);
+  if (!activeFixture || activeFixture.id !== payload.fixtureId) {
+    badRequest("本场已到锁定时间，不能移除下注。", 423);
+  }
+
+  const [entry] = await db
+    .select()
+    .from(fixtureEntries)
+    .where(
+      and(
+        eq(fixtureEntries.id, payload.entryId),
+        eq(fixtureEntries.fixtureId, payload.fixtureId),
+        eq(fixtureEntries.participantId, participantId),
+      ),
+    )
+    .limit(1);
+  if (!entry) badRequest("没有找到这组下注，请刷新后重试。", 404);
+  if (entry.editUnlockedAt === null) {
+    badRequest("请先由管理员单独解锁这组下注。", 409);
+  }
+  if (entry.revision !== payload.entryRevision) {
+    badRequest("下注状态已经变化，请刷新页面后再确认。", 409);
+  }
+
+  const lockedBets = await lockedBetsForParticipant(
+    db,
+    payload.fixtureId,
+    participantId,
+  );
+  if (lockedBets.some((bet) => bet.status !== "pending")) {
+    badRequest("本场注单已进入结算流程，不能再移除。", 409);
+  }
+
+  await db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(fixtureEntries)
+      .where(
+        and(
+          eq(fixtureEntries.id, entry.id),
+          eq(fixtureEntries.revision, entry.revision),
+        ),
+      )
+      .returning({ id: fixtureEntries.id });
+    if (removed.length !== 1) {
+      badRequest("下注状态已经变化，请刷新页面后再确认。", 409);
+    }
+    await tx
+      .delete(bets)
+      .where(
+        and(
+          eq(bets.fixtureId, payload.fixtureId),
+          eq(bets.participantId, participantId),
+        ),
+      );
+  });
+}
+
 function validateOfferPayload(payload: UploadOddsRequest) {
   if (!Array.isArray(payload.offers) || payload.offers.length === 0) {
     badRequest("赔率文件至少需要一个 offer。", 400);
@@ -1432,6 +1504,7 @@ export async function POST(request: Request) {
     }
     if (
       (payload.action === "set-entry-edit-unlocked" ||
+        payload.action === "remove-entry" ||
         payload.action === "upload-odds" ||
         payload.action === "manual-result") &&
       !(await hasValidAdminSession(request))
@@ -1446,6 +1519,8 @@ export async function POST(request: Request) {
       await lockEntry(db, payload, now);
     } else if (payload.action === "set-entry-edit-unlocked") {
       await setEntryEditUnlocked(db, payload, now);
+    } else if (payload.action === "remove-entry") {
+      await removeEntry(db, payload, now);
     } else if (payload.action === "upload-odds") {
       await uploadOdds(db, payload, now);
     } else if (payload.action === "manual-result") {

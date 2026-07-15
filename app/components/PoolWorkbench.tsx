@@ -34,6 +34,7 @@ type SheetName =
   | "people"
   | "odds"
   | "confirm"
+  | "remove-confirm"
   | "admin-login"
   | "manage"
   | "unlock-confirm"
@@ -1278,6 +1279,38 @@ export function PoolWorkbench() {
     }
   }
 
+  async function removeUnlockedEntry() {
+    if (!pendingParticipant || !selectedFixture || !pendingEntry?.canEdit) return;
+    const participantId = pendingParticipant;
+    const entry = pendingEntry;
+    const name = state.participants.find((person) => person.id === participantId)?.name;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "remove-entry",
+          entryId: entry.id,
+          fixtureId: selectedFixture.id,
+          participantId,
+          entryRevision: entry.revision,
+        }),
+      });
+      await assertAdminResponse(response);
+      applyState(unwrapState(await response.json()));
+      setDrafts((current) => ({ ...current, [participantId]: [] }));
+      setToast(`${name ?? "参与者"}的本场下注已全部移除`);
+      setSheet(null);
+      setPendingParticipant(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "移除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function syncResults() {
     if (syncInFlightRef.current) {
       setToast("正在检查赛果，请稍候");
@@ -1523,7 +1556,7 @@ export function PoolWorkbench() {
       const name = state.participants.find((person) => person.id === entry.participantId)?.name;
       setToast(
         unlocked
-          ? `${name ?? "参与者"}的下注已单独解锁，可在卡片中修改`
+          ? `${name ?? "参与者"}的下注已单独解锁，可在卡片中修改或移除`
           : `${name ?? "参与者"}的下注已恢复锁定，原注单保持有效`,
       );
       setUnlockTarget(null);
@@ -1821,7 +1854,16 @@ export function PoolWorkbench() {
                                   <strong>{person.name}<span>{editingEntry ? "管理员已解锁" : "未锁定"}</span></strong>
                                 </div>
                                 {editingEntry ? (
-                                  <span className="wb-editing-badge">原注单仍有效</span>
+                                  <button
+                                    className="wb-remove-entry-button"
+                                    type="button"
+                                    onClick={() => {
+                                      setPendingParticipant(person.id);
+                                      setSheet("remove-confirm");
+                                    }}
+                                  >
+                                    移除下注
+                                  </button>
                                 ) : (
                                   <button type="button" onClick={() => setDrafts((current) => ({ ...current, [person.id]: [] }))}>移除</button>
                                 )}
@@ -2068,6 +2110,63 @@ export function PoolWorkbench() {
             </p>
           </div>
           <footer className="wb-sheet-footer wb-confirm-footer"><button type="button" disabled={busy} onClick={() => void lockEntry()}>{busy ? "正在锁定…" : pendingEntry?.canEdit ? "确认更新并重新锁定" : "确认锁定并加入奖池"}</button></footer>
+        </DialogShell>
+      )}
+
+      {sheet === "remove-confirm" && pendingParticipant && selectedFixture && (
+        <DialogShell
+          title="确认移除下注"
+          eyebrow="将从本场奖池中删除此人的全部正式注单"
+          onClose={() => {
+            setSheet(null);
+            setPendingParticipant(null);
+          }}
+        >
+          <div className="wb-sheet-body">
+            {error && (
+              <div className="wb-sheet-error" role="alert">
+                <span>{error}</span>
+                <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button>
+              </div>
+            )}
+            {pendingEntry?.canEdit ? (
+              <>
+                <div className="wb-confirm-person">
+                  <span>
+                    <ParticipantAvatar
+                      participantId={pendingParticipant}
+                      className="wb-avatar-confirm"
+                    />
+                    <b>{state.participants.find((person) => person.id === pendingParticipant)?.name}</b>
+                  </span>
+                  <strong>{pendingEntry.betCount}注 · {money(pendingEntry.stakeCents)}</strong>
+                </div>
+                <div className="wb-confirm-list">
+                  {state.bets
+                    .filter((bet) => bet.fixtureId === selectedFixture.id && bet.participantId === pendingParticipant)
+                    .map((bet, index) => (
+                      <p key={bet.id}><span>{index + 1}. {bet.label}</span><strong>{bet.odds.toFixed(2)}</strong></p>
+                    ))}
+                </div>
+                <p className="wb-sheet-note">
+                  移除后，此人的全部正式注单会立即退出本场奖池；锁定时间前仍可重新添加。其他人的下注不受影响。
+                </p>
+              </>
+            ) : (
+              <div className="wb-no-offers">
+                <b>下注状态已经变化</b>
+                <p>这组下注已恢复锁定、被移除或超过操作时间，请返回比赛卡查看最新状态。</p>
+                <button type="button" onClick={() => { setSheet(null); setPendingParticipant(null); }}>返回比赛卡</button>
+              </div>
+            )}
+          </div>
+          {pendingEntry?.canEdit && (
+            <footer className="wb-sheet-footer wb-confirm-footer">
+              <button className="wb-remove-confirm-button" type="button" disabled={busy} onClick={() => void removeUnlockedEntry()}>
+                {busy ? "正在移除…" : "确认移除全部下注"}
+              </button>
+            </footer>
+          )}
         </DialogShell>
       )}
 
@@ -2322,7 +2421,7 @@ export function PoolWorkbench() {
                 ? "固定锁定时间已到，原注单保持有效；当前不能再改变任何人的解锁状态。"
                 : unlockTargetEntry.canEdit
                 ? "恢复锁定会关闭此人的编辑权限，原注单继续有效；其他参与人的下注不受影响。"
-                : "解锁后原注单仍然有效并计入奖池；只有此人重新锁定时才会替换。其他参与人的下注不受影响。"}
+                : "解锁后原注单仍然有效并计入奖池；可在比赛卡中修改或移除。修改需重新锁定后才会替换，移除需再次确认。其他参与人的下注不受影响。"}
             </p>
           </div>
           <footer className="wb-sheet-footer wb-confirm-footer">
@@ -2336,7 +2435,7 @@ export function PoolWorkbench() {
       {sheet === "rules" && (
         <DialogShell title="奖池规则" eyebrow="简单、透明、无庄家风险" onClose={() => setSheet(null)}>
           <div className="wb-sheet-body wb-rules">
-            <ol><li><b>每注固定10元</b><span>每人每场1–3注；个人点击锁定后才正式加入奖池。</span></li><li><b>赔率不设上下限</b><span>中奖彩票理论奖金 = 10元 × 锁定赔率。</span></li><li><b>只看90分钟</b><span>常规时间与伤停补时有效，不含加时赛及点球大战。</span></li><li><b>奖池不足同比缩放</b><span>所有中奖者按理论奖金占比同比例折算，任何人都不用补钱。</span></li><li><b>剩余自动滚存</b><span>本场支付后仍有余额，则全额进入下一场奖池。</span></li><li><b>逐人解锁修改</b><span>固定锁定时间前，管理员可只为某个人开放修改；重新锁定前原注单仍有效。</span></li></ol>
+            <ol><li><b>每注固定10元</b><span>每人每场1–3注；个人点击锁定后才正式加入奖池。</span></li><li><b>赔率不设上下限</b><span>中奖彩票理论奖金 = 10元 × 锁定赔率。</span></li><li><b>只看90分钟</b><span>常规时间与伤停补时有效，不含加时赛及点球大战。</span></li><li><b>奖池不足同比缩放</b><span>所有中奖者按理论奖金占比同比例折算，任何人都不用补钱。</span></li><li><b>剩余自动滚存</b><span>本场支付后仍有余额，则全额进入下一场奖池。</span></li><li><b>逐人解锁调整</b><span>固定锁定时间前，管理员可只为某个人开放修改或移除；操作完成前原注单仍有效。</span></li></ol>
           </div>
         </DialogShell>
       )}

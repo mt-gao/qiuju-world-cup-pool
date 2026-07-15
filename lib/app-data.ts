@@ -577,6 +577,14 @@ export interface SetEntryEditUnlockedRequest {
   unlocked: boolean;
 }
 
+export interface RemoveEntryRequest {
+  action: "remove-entry";
+  entryId: string;
+  fixtureId: string;
+  participantId: ParticipantId;
+  entryRevision: number;
+}
+
 export interface OddsOfferInput {
   id?: string;
   marketType: string;
@@ -613,6 +621,7 @@ export type StateMutationRequest =
   | PlaceBetsRequest
   | LockEntryRequest
   | SetEntryEditUnlockedRequest
+  | RemoveEntryRequest
   | UploadOddsRequest
   | ManualResultRequest;
 
