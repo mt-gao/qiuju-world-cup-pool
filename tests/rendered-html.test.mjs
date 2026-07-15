@@ -169,9 +169,10 @@ test("completed fixtures open local history in a dedicated layer while the provi
   assert.match(workbench, /next\.nextFixtureId \?\?[\s\S]*?recordStatus !== "settled"/);
   assert.match(
     workbench,
-    /if \(!hasExplicitFixtureSelection\.current\) \{\s*return;\s*\}/,
-    "programmatic positioning must not recursively re-center from its own scroll event",
+    /const target = pendingProgrammaticCenterId\.current;\s*pendingProgrammaticCenterId\.current = null;\s*if \(target\) centerFixtureCard\(track, target\);/,
+    "initial positioning should correct scroll snapping once after it settles",
   );
+  assert.match(workbench, /pendingProgrammaticCenterId\.current = selectedFixtureId;/);
   assert.match(workbench, /onPointerDownCapture=\{markCarouselInteraction\}/);
   assert.doesNotMatch(
     css,

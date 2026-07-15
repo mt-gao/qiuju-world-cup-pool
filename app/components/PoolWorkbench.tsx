@@ -645,6 +645,7 @@ export function PoolWorkbench() {
   const scrollFrame = useRef<number | null>(null);
   const scrollSettleTimer = useRef<number | null>(null);
   const requestedScrollFixtureId = useRef<string | null>(null);
+  const pendingProgrammaticCenterId = useRef<string | null>(null);
   const hasExplicitFixtureSelection = useRef(false);
   const stateRef = useRef(state);
   const syncInFlightRef = useRef(false);
@@ -1053,6 +1054,7 @@ export function PoolWorkbench() {
     if (!track) return;
     didInitialScroll.current = true;
     requestedScrollFixtureId.current = null;
+    pendingProgrammaticCenterId.current = selectedFixtureId;
     centerFixtureCard(track, selectedFixtureId);
   }, [selectedFixtureId, fixtures.length]);
 
@@ -1079,6 +1081,9 @@ export function PoolWorkbench() {
         const track = trackRef.current;
         if (!track) return;
         if (!hasExplicitFixtureSelection.current) {
+          const target = pendingProgrammaticCenterId.current;
+          pendingProgrammaticCenterId.current = null;
+          if (target) centerFixtureCard(track, target);
           return;
         }
         const trackBox = track.getBoundingClientRect();
