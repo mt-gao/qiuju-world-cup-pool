@@ -761,36 +761,41 @@ export function PoolWorkbench() {
     ? Math.max(0, selectedFixture.settlement.eligiblePoolCents - selectedFixture.settlement.paidCents)
     : carryBefore;
 
-  const leaderboard = useMemo(() => {
-    if (!selectedFixture) return [];
-    return selectedEntries
-      .map((entry) => {
-        const participant = state.participants.find((person) => person.id === entry.participantId);
-        const participantBets = state.bets.filter(
-          (bet) => bet.fixtureId === selectedFixture.id && bet.participantId === entry.participantId,
+  // 本场排行榜按每场 fixture 预计算，供已结算的参与卡片直接渲染。
+  const leaderboardByFixture = useMemo(() => {
+    const map = new Map<string, PoolRankingRow[]>();
+    for (const fixture of fixtures) {
+      const fEntries = state.entries.filter((entry) => entry.fixtureId === fixture.id);
+      const fBets = state.bets.filter((bet) => bet.fixtureId === fixture.id);
+      const rows = fEntries
+        .map((entry) => {
+          const participant = state.participants.find((person) => person.id === entry.participantId);
+          const participantBets = fBets.filter((bet) => bet.participantId === entry.participantId);
+          const payout = participantBets.reduce((sum, bet) => sum + bet.payoutCents, 0);
+          const wonCount = participantBets.filter((bet) => bet.status === "won").length;
+          return {
+            id: entry.participantId,
+            name: participant?.name ?? entry.participantId,
+            invested: entry.stakeCents,
+            payout,
+            roi: entry.stakeCents > 0 ? ((payout - entry.stakeCents) / entry.stakeCents) * 100 : 0,
+            hasWin: wonCount > 0,
+            wonCount,
+            displayOrder: participant?.displayOrder ?? 99,
+          } satisfies PoolRankingRow;
+        })
+        .sort(
+          (a, b) =>
+            Number(b.hasWin) - Number(a.hasWin) ||
+            b.payout - a.payout ||
+            b.roi - a.roi ||
+            b.wonCount - a.wonCount ||
+            a.displayOrder - b.displayOrder,
         );
-        const payout = participantBets.reduce((sum, bet) => sum + bet.payoutCents, 0);
-        const wonCount = participantBets.filter((bet) => bet.status === "won").length;
-        return {
-          id: entry.participantId,
-          name: participant?.name ?? entry.participantId,
-          invested: entry.stakeCents,
-          payout,
-          roi: entry.stakeCents > 0 ? ((payout - entry.stakeCents) / entry.stakeCents) * 100 : 0,
-          hasWin: wonCount > 0,
-          wonCount,
-          displayOrder: participant?.displayOrder ?? 99,
-        } satisfies PoolRankingRow;
-      })
-      .sort(
-        (a, b) =>
-          Number(b.hasWin) - Number(a.hasWin) ||
-          b.payout - a.payout ||
-          b.roi - a.roi ||
-          b.wonCount - a.wonCount ||
-          a.displayOrder - b.displayOrder,
-      );
-  }, [selectedEntries, selectedFixture, state.bets, state.participants]);
+      map.set(fixture.id, rows);
+    }
+    return map;
+  }, [fixtures, state.entries, state.bets, state.participants]);
 
   // 天梯榜：聚合全体参与人跨场的投入 / 总收益 / 净收益。
   // 排序：净收益 desc → 总收益 desc → 总投入 asc → displayOrder asc
@@ -1782,14 +1787,6 @@ export function PoolWorkbench() {
             </div>
           )}
 
-          {selectedFixture.recordStatus === "settled" && (
-            <div className="wb-ranking-wrap">
-              <div className="wb-ranking-title"><strong>本场排行榜</strong><span>剩余 {money(rollover)} 滚入下一场</span></div>
-              {leaderboard.length ? (
-                <PoolPodium rows={leaderboard} />
-              ) : <p className="wb-no-ranking">本场无人参与，奖池全额滚存。</p>}
-            </div>
-          )}
         </section>
 
         <section className="wb-carousel-section" aria-labelledby="wb-carousel-title">
@@ -1812,6 +1809,10 @@ export function PoolWorkbench() {
               const selected = fixture.id === selectedFixture.id;
               const mode = fixturePresentationMode(fixture, state.nextFixtureId);
               const emptyCopy = lockedCardCopy(fixture, mode);
+              const fixtureLeaderboard = leaderboardByFixture.get(fixture.id) ?? [];
+              const fixtureRollover = fixture.settlement
+                ? Math.max(0, fixture.settlement.eligiblePoolCents - fixture.settlement.paidCents)
+                : 0;
               return (
                 <article
                   className={`wb-fixture-card${selected ? " is-selected" : ""}${active ? " is-active" : " is-readonly"}${mode === "completed" ? " is-completed" : ""}${mode.startsWith("upcoming") ? " is-upcoming" : ""}`}
@@ -1829,23 +1830,30 @@ export function PoolWorkbench() {
                   <div className={`wb-card-body${mode === "completed" ? " wb-card-body-completed" : ""}`}>
                     {mode === "completed" ? (
                       entries.length > 0 ? (
-                        <button
-                          className="wb-history-trigger"
-                          type="button"
-                          aria-haspopup="dialog"
-                          aria-label={`查看 ${fixture.homeTeam.name} 对 ${fixture.awayTeam.name} 的投注历史，共 ${entries.length} 人 ${bets.length} 注`}
-                          onFocus={(event) => event.stopPropagation()}
-                          onClick={() => openBetHistory(fixture.id)}
-                        >
-                          <span className="wb-history-trigger-mark" aria-hidden="true">账</span>
-                          <span>
-                            <b>查看投注历史</b>
-                            <small>
-                              {entries.length}人 · {bets.length}注 · 投入 {money(entries.reduce((sum, entry) => sum + entry.stakeCents, 0))} · 收获 {money(bets.reduce((sum, bet) => sum + bet.payoutCents, 0))}
-                            </small>
-                          </span>
-                          <strong aria-hidden="true">›</strong>
-                        </button>
+                        <div className="wb-completed-content">
+                          <div className="wb-ranking-title">
+                            <strong>本场排行榜</strong>
+                            <span>剩余 {money(fixtureRollover)} 滚入下一场</span>
+                          </div>
+                          <PoolPodium rows={fixtureLeaderboard} />
+                          <button
+                            className="wb-history-trigger"
+                            type="button"
+                            aria-haspopup="dialog"
+                            aria-label={`查看 ${fixture.homeTeam.name} 对 ${fixture.awayTeam.name} 的投注历史，共 ${entries.length} 人 ${bets.length} 注`}
+                            onFocus={(event) => event.stopPropagation()}
+                            onClick={() => openBetHistory(fixture.id)}
+                          >
+                            <span className="wb-history-trigger-mark" aria-hidden="true">账</span>
+                            <span>
+                              <b>查看投注历史</b>
+                              <small>
+                                {entries.length}人 · {bets.length}注 · 投入 {money(entries.reduce((sum, entry) => sum + entry.stakeCents, 0))} · 收获 {money(bets.reduce((sum, bet) => sum + bet.payoutCents, 0))}
+                              </small>
+                            </span>
+                            <strong aria-hidden="true">›</strong>
+                          </button>
+                        </div>
                       ) : (
                         <div className="wb-card-empty"><span>终</span><b>{emptyCopy.title}</b><p>{emptyCopy.body}</p></div>
                       )
