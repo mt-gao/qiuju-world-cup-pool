@@ -810,8 +810,8 @@ export function PoolWorkbench() {
   );
 
   // 天梯榜：聚合全体参与人跨场的投入 / 总收益 / 净收益。
-  // 排序：净收益 desc → 总收益 desc → 总投入 asc → displayOrder asc
-  // 并列名次以净收益为准（1224 排名法）。
+  // 排序：有下注记录者优先（净收益 desc → 总收益 desc → 总投入 asc → displayOrder asc），
+  // 一注未下的参与人排到最后并共享末位名次；并列名次以净收益为准（1224 排名法）。
   const ladderRows = useMemo(() => {
     const base = state.participants.map((person) => {
       const personEntries = state.entries.filter((entry) => entry.participantId === person.id && settledFixtureIds.has(entry.fixtureId));
@@ -828,19 +828,23 @@ export function PoolWorkbench() {
         invested,
         payout,
         net: payout - invested,
+        idle: personBets.length === 0,
       };
     });
     base.sort(
       (a, b) =>
+        Number(a.idle) - Number(b.idle) ||
         b.net - a.net ||
         b.payout - a.payout ||
         a.invested - b.invested ||
         a.displayOrder - b.displayOrder,
     );
-    // 1224 并列排名：净收益相等共享名次
+    // 1224 并列排名：净收益相等共享名次；一注未下者共享末位名次
+    const bettorCount = base.filter((row) => !row.idle).length;
     let lastNet = Number.NaN;
     let lastRank = 0;
     return base.map((row, index) => {
+      if (row.idle) return { ...row, rank: bettorCount + 1 };
       if (row.net !== lastNet) {
         lastRank = index + 1;
         lastNet = row.net;
@@ -1992,13 +1996,14 @@ export function PoolWorkbench() {
             <div className="wb-history-list">
               {ladderRows.map((row) => {
                 const netStatus = row.net > 0 ? "pos" : row.net < 0 ? "neg" : "zero";
-                const highlight = row.rank <= 3 ? `top-${row.rank}` : "none";
+                const highlight = !row.idle && row.rank <= 3 ? `top-${row.rank}` : "none";
                 return (
                   <section
                     className="wb-history-person wb-ladder-person-card"
                     key={row.id}
                     data-highlight={highlight}
                     data-rank={row.rank}
+                    data-idle={row.idle ? "true" : undefined}
                   >
                     <header>
                       <span className="wb-history-person-name">

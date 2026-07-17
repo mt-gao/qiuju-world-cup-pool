@@ -1701,6 +1701,12 @@ api-sports-widget[data-theme="WorldCup"] {
   box-shadow: 0 0 0 2px oklch(1 0 0 / 0.5);
 }
 
+/* 一注未下的参与人：排到最后，降低色彩饱和度并半透明 */
+.wb-ladder-person-card[data-idle="true"] {
+  opacity: 0.55;
+  filter: saturate(0.35);
+}
+
 .wb-history-body {
   padding-bottom: max(18px, calc(12px + env(safe-area-inset-bottom)));
 }
